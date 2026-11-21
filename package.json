@@ -1,0 +1,12 @@
+{
+  "name": "ridelens",
+  "version": "0.1.0",
+  "description": "Live motorcycle ride analytics (IMU + GPS + OBD-II) with wrong-side vehicle reporting",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "start": "node server/server.mjs",
+    "test": "node --test test/*.test.mjs"
+  }
+}
