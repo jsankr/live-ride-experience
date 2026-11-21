@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0d0d0d" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="RideLens" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <title>RideLens</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 12 L17 7" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><circle cx="12" cy="12" r="2" fill="currentColor"/></svg>RideLens</div>
+    <div class="chips" id="chips">
+      <span class="chip" data-src="gps"><i></i>GPS</span>
+      <span class="chip" data-src="imu"><i></i>IMU</span>
+      <span class="chip" data-src="obd"><i></i>OBD</span>
+    </div>
+    <button id="recBtn" class="rec" aria-pressed="false"><span class="rec-dot"></span><span id="recLabel">Start ride</span></button>
+  </header>
+
+  <main>
+    <!-- LIVE -->
+    <section id="view-live" class="view active" aria-label="Live">
+      <div class="banner" id="banner" hidden></div>
+      <div class="grid live-grid">
+        <article class="card hero">
+          <svg class="dial" viewBox="0 0 220 220" aria-hidden="true">
+            <path id="rpmTrack" class="dial-track" />
+            <path id="rpmArc" class="dial-arc" />
+          </svg>
+          <div class="hero-center">
+            <div class="speed"><span id="speed">0</span><small>km/h</small></div>
+            <div class="sub"><span id="rpm">— rpm</span></div>
+          </div>
+          <div class="gear-box"><span class="label">Gear</span><span id="gear" class="gear">N</span><span id="clutch" class="clutch" hidden>CLUTCH</span></div>
+          <div class="speed-src" id="speedSrc">—</div>
+        </article>
+
+        <article class="card half">
+          <h3>Lean angle</h3>
+          <svg class="lean" viewBox="0 0 200 120" aria-hidden="true">
+            <path d="M20 100 A80 80 0 0 1 180 100" class="dial-track" />
+            <g id="leanBike" transform="rotate(0 100 100)">
+              <line x1="100" y1="100" x2="100" y2="28" class="lean-needle" />
+              <circle cx="100" cy="28" r="6" class="lean-head" />
+            </g>
+            <text x="22" y="116" class="tick">L</text><text x="172" y="116" class="tick">R</text>
+          </svg>
+          <div class="metric-row"><span class="big" id="lean">0°</span><span class="muted">max <b id="leanMaxL">0°</b>L · <b id="leanMaxR">0°</b>R</span></div>
+        </article>
+
+        <article class="card half">
+          <h3>G-force</h3>
+          <canvas id="gcircle" class="gcircle"></canvas>
+          <div class="metric-row"><span class="big" id="gNow">0.00 g</span><span class="muted">peak <b id="gPeak">0.00 g</b></span></div>
+        </article>
+
+        <div class="tiles">
+          <article class="tile"><span class="label">Coolant</span><span class="val" id="coolant">—</span><span class="hint" id="coolantHint">engine temp</span></article>
+          <article class="tile"><span class="label">Throttle</span><span class="val" id="throttle">—</span><span class="meter"><i id="throttleBar"></i></span></article>
+          <article class="tile"><span class="label">Altitude</span><span class="val" id="alt">—</span><span class="hint" id="climb">↑0 ↓0 m</span></article>
+          <article class="tile"><span class="label">Distance</span><span class="val" id="dist">0.0 km</span><span class="hint" id="elapsed">0:00</span></article>
+          <article class="tile"><span class="label">Road</span><span class="val" id="rough">—</span><span class="status-pill" id="comfort">—</span></article>
+          <article class="tile"><span class="label">Ride score</span><span class="val" id="score">—</span><span class="hint" id="scoreHint">smooth · brake · shift</span></article>
+        </div>
+
+        <article class="card wide">
+          <div class="card-head"><h3>Road shock</h3><span class="legend"><i style="background:var(--series-1)"></i>m/s² <i class="dash" style="border-color:var(--status-serious)"></i>impact</span></div>
+          <canvas id="chartVert" class="strip"></canvas>
+        </article>
+        <article class="card wide">
+          <div class="card-head"><h3>Brake / accel</h3><span class="legend"><i style="background:var(--series-2)"></i>g <i class="band"></i>hard</span></div>
+          <canvas id="chartLong" class="strip"></canvas>
+        </article>
+        <article class="card wide">
+          <div class="card-head"><h3>Engine &amp; clutch</h3><span class="legend"><i style="background:var(--series-3)"></i>rpm <i class="dash" style="border-color:var(--status-warning)"></i>shift</span></div>
+          <canvas id="chartRpm" class="strip"></canvas>
+        </article>
+
+        <article class="card feed-card">
+          <div class="card-head"><h3>Events</h3><span class="muted" id="evCount">0</span></div>
+          <ol class="feed" id="feed"><li class="empty">Events appear here as you ride.</li></ol>
+        </article>
+        <article class="card map-card">
+          <div id="liveMap" class="map"></div>
+        </article>
+      </div>
+    </section>
+
+    <!-- REPORT -->
+    <section id="view-report" class="view" aria-label="Ride report">
+      <div id="reportBody"><p class="empty pad">Finish a ride, or open one from History, to see its report.</p></div>
+    </section>
+
+    <!-- HISTORY -->
+    <section id="view-history" class="view" aria-label="History">
+      <div class="section-head"><h2>Ride history</h2><button class="ghost" id="importBtn">Import JSON</button><input type="file" id="importFile" accept="application/json" hidden></div>
+      <div id="historyList" class="list"></div>
+    </section>
+
+    <!-- WRONG-SIDE -->
+    <section id="view-wrongside" class="view" aria-label="Wrong-side reports">
+      <div class="grid ws-grid">
+        <article class="card cam-card">
+          <div class="card-head"><h3>Evidence camera</h3><button class="ghost" id="camToggle">Start camera</button></div>
+          <div class="cam"><video id="camVideo" playsinline muted></video><div class="cam-off" id="camOff">Camera off. Turn it on before you ride: it keeps a 4-second pre-roll so the vehicle is captured even after it has passed.</div></div>
+          <button class="capture" id="captureBtn" disabled>Capture wrong-side vehicle</button>
+          <p class="fine">Shortcut: a Bluetooth remote or keyboard sending <kbd>Enter</kbd>/<kbd>Space</kbd> triggers capture. Keep your eyes on the road: capture is one tap, and you can add details after you stop.</p>
+        </article>
+        <article class="card">
+          <div class="card-head"><h3>Reports</h3>
+            <span class="actions"><button class="ghost" id="wsCsv">CSV</button><button class="ghost" id="wsJson">JSON</button><button class="ghost" id="wsSync">Sync</button></span>
+          </div>
+          <div id="wsStats" class="ws-stats"></div>
+          <div id="wsList" class="list"></div>
+        </article>
+        <article class="card wide map-card"><div id="wsMap" class="map"></div></article>
+      </div>
+    </section>
+
+    <!-- SETUP -->
+    <section id="view-setup" class="view" aria-label="Setup">
+      <div class="grid setup-grid">
+        <article class="card">
+          <h3>This phone &amp; browser</h3>
+          <p class="fine">Checked live on this device. Grey items are not offered by this browser.</p>
+          <ul class="caps" id="caps"></ul>
+          <div class="row"><button class="ghost" id="permBtn">Grant motion, location &amp; camera</button></div>
+          <p class="fine">Browsers pause sensors when the screen turns off or you switch apps. During a ride keep RideLens open and in front. The app keeps the screen awake where the browser allows it.</p>
+        </article>
+        <article class="card">
+          <h3>OBD-II adapter</h3>
+          <p class="fine">Needs an ELM327-compatible adapter that uses <b>Bluetooth LE</b>. Classic-Bluetooth adapters cannot be reached from any browser.</p>
+          <p class="fine" id="bleNote" hidden></p>
+          <label>Protocol
+            <select id="protocol">
+              <option value="0">Auto-detect (recommended: the adapter probes the bike)</option>
+              <option value="5">ISO 14230 KWP2000 fast init</option>
+              <option value="4">ISO 14230 KWP2000 5-baud init</option>
+              <option value="3">ISO 9141-2</option>
+              <option value="6">ISO 15765 CAN 11-bit 500k</option>
+            </select>
+          </label>
+          <div class="row"><button id="bleBtn">Connect Bluetooth LE</button><button class="ghost" id="obdStop">Disconnect</button></div>
+          <details class="fine"><summary>Wi-Fi adapter (advanced)</summary>
+            <p>Browsers cannot talk to Wi-Fi OBD adapters directly. This only works if the RideLens server runs on a device joined to the adapter's Wi-Fi.</p>
+            <label>Wi-Fi bridge URL <input id="bridgeUrl" placeholder="ws://127.0.0.1:8080/obd?host=192.168.0.10&port=35000"></label>
+            <div class="row"><button class="ghost" id="wifiBtn">Connect via Wi-Fi bridge</button></div>
+          </details>
+          <pre class="log" id="obdLog"></pre>
+        </article>
+        <article class="card">
+          <h3>Phone mount &amp; sensors</h3>
+          <p class="fine">Mount the phone rigidly (vibration-damped mount). Orientation does not matter: RideLens learns "up" when you are stationary and "forward" from your first few speed changes.</p>
+          <label>Lean left/right direction
+            <select id="invertYaw"><option value="">Automatic (learned from GPS turns)</option><option value="normal">Force normal</option><option value="invert">Force inverted</option></select>
+          </label>
+          <label>Units <select id="units"><option value="metric">km/h, °C, m</option><option value="imperial">mph, °F, ft</option></select></label>
+          <label>Theme <select id="theme"><option value="">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
+        </article>
+        <article class="card">
+          <h3>Report server (optional)</h3>
+          <p class="fine">Not needed: rides and reports are stored on this phone. Only set this if you run the RideLens server somewhere to collect reports centrally.</p>
+          <label>Server URL <input id="serverUrl" placeholder="https://your-server:8080"></label>
+          <label>API token <input id="serverToken" type="password" autocomplete="off"></label>
+          <div class="row"><button class="ghost" id="testServer">Test connection</button><span id="serverStatus" class="muted"></span></div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <button id="fab" class="fab" title="Report wrong-side vehicle" aria-label="Report wrong-side vehicle">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="12" cy="13" r="3.5" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+  </button>
+
+  <nav class="tabbar" id="tabbar">
+    <button data-view="live" class="active"><svg viewBox="0 0 24 24"><path d="M4 16a8 8 0 1 1 16 0" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 16l4-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Live</button>
+    <button data-view="report"><svg viewBox="0 0 24 24"><path d="M5 19V9M10 19V5M15 19v-7M20 19v-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Report</button>
+    <button data-view="history"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 8v4l3 2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>History</button>
+    <button data-view="wrongside"><svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4M12 16.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Wrong-side</button>
+    <button data-view="setup"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Setup</button>
+  </nav>
+
+  <dialog id="reportDialog" class="sheet"></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
