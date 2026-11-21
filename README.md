@@ -5,8 +5,9 @@ A phone-first PWA (Progressive Web App) that captures every ride live and turns 
 ```
 npm start            # http://localhost:8080 (zero dependencies, Node ≥ 22.5)
 npm test             # 19 tests: detectors vs simulator ground truth, OBD parser, server, Wi-Fi bridge
-open http://localhost:8080/?demo   # simulated ride, no bike needed
 ```
+
+**No synthetic data in the app.** Every number on screen comes from your phone's sensors or the bike's ECU. There is no demo or sample mode. The ride simulator lives in `test/` only and is used solely to score the detectors in automated tests.
 
 ## What gets measured, and from which sensor
 
@@ -23,7 +24,7 @@ open http://localhost:8080/?demo   # simulated ride, no bike needed
 | Altitude, climb/descent | GPS | Smoothed, with 3 m hysteresis. Browsers do not expose the barometer. |
 | Overheating | OBD coolant | Alert at ≥ 105 °C. |
 
-The phone can be mounted at **any angle**. "Up" comes from gravity while the speed is steady, and "forward" is learned from your first speed changes. On the simulator this is verified to > 0.95 alignment.
+The phone can be mounted at **any angle**. "Up" comes from gravity while the speed is steady, and "forward" is learned from your first speed changes. In simulation tests this reaches > 0.95 alignment. It has not yet been measured on a real bike.
 
 ## Hardware: read this before buying an adapter
 - **Use an ELM327 _Bluetooth LE_ adapter** (e.g. Vgate iCar Pro BLE, Veepeak BLE+, OBDLink CX). Browsers can't reach classic-Bluetooth (SPP) dongles.
@@ -31,6 +32,16 @@ The phone can be mounted at **any angle**. "Up" comes from gravity while the spe
 - **Wi-Fi ELM327**: browsers can't open raw TCP sockets, so `server/server.mjs` bridges them at `/obd`. The bridge must run on a device on the adapter's Wi-Fi, such as the phone itself via Termux. BLE is simpler.
 - **Motorcycle diagnostic plugs are brand-specific** (often a 4- or 6-pin K-line). You need the matching cable to a 16-pin J1962 socket. Most BS6/Euro 5 bikes speak ISO 14230 KWP2000 (Setup → protocol "5"). Many bikes expose only some PIDs, and some none on the generic protocol.
 - Sensors need HTTPS on a phone (`localhost` is exempt). Set `TLS_CERT` / `TLS_KEY`, or host the `public/` folder on any HTTPS static host.
+
+## Triumph Bonneville T120 (2016+, liquid-cooled 1200)
+What is verified, and what isn't:
+- **Engine**: 1200 cc, 270° parallel twin, liquid-cooled ([Wikipedia](https://en.wikipedia.org/wiki/Triumph_Bonneville_T120_1200)).
+- **Diagnostic port**: owners report it **under the seat, near the battery, behind a rubber cover** ([TriumphRat](https://www.triumphrat.net/threads/diagnostic-port.733874/)). **Unverified for 2018 specifically:**
+  - Whether it is a standard 16-pin socket or needs an adapter cable. A 2015 T100 owner reports a 16-pin socket ([Triumph Trophy forum](https://www.triumph-trophy.com/index.php?topic=5140.0)), but adapter cables are also sold for the T100/T120 ([eBay listing](https://www.ebay.ca/itm/275195881620)).
+  - **Look at your bike before buying anything.**
+- **Coolant temperature over OBD**: a 2020 T120 owner reads it with a generic OBD reader ([TriumphRat](https://www.triumphrat.net/threads/2020-bonneville-t120-high-coolant-temp-p0117-severity-of-the-problem.971421/)). The T120 has no temperature gauge ([TriumphRat](https://www.triumphrat.net/threads/t120-temp-gauge.779482/)), so this is the most useful OBD channel on this bike. The same thread notes a constant 127 °C reading can mean an open-circuit sensor. Treat that as a sensor fault, not real heat.
+- **Protocol**: not confirmed by any source found. Leave Setup → Protocol on **Auto-detect**. The app logs which PIDs the ECU reports as supported (`0100` bitmap) and polls only those, so you see exactly what your bike provides.
+- **Adapters**: TuneECU documents that Triumph *reprogramming* over Bluetooth requires specific adapters (OBDLink LX/MX/MX+) ([TuneECU PDF](https://tuneecu.net/TuneECU_Android/Basics_Android_Version.pdf)). RideLens only *reads* data, but those OBDLink units are Classic Bluetooth. For this app, pick a **BLE** adapter (e.g. OBDLink CX).
 
 ## Wrong-side reporter
 - A 4-second rolling pre-roll of frames is kept, so one tap saves the moment *before* you reacted, plus a sharp frame and 3 follow-ups.
@@ -47,16 +58,16 @@ The phone can be mounted at **any angle**. "Up" comes from gravity while the spe
 ```
 public/            PWA (vanilla ES modules, no build step)
   js/analytics.js  sensor-fusion + event detection (pure; runs in Node tests)
-  js/simulator.js  physics-flavoured ride simulator with ground truth
   js/obd.js        ELM327 driver (BLE + WebSocket transports)
   js/reports.js    evidence camera, plate validation/OCR, export, sync
   js/charts.js     canvas strip charts, friction circle, SVG report charts
   js/app.js        UI
 server/server.mjs  static + REST + SQLite + Wi-Fi OBD bridge
-test/              node:test suites
+test/              node:test suites + simulator.js (test-only ground truth)
 ```
 
 ## Known limits
-- Detector thresholds are tuned on simulated data. Calibrate them against a few real rides on your bike (`DEFAULTS` in `analytics.js`).
+- **All accuracy figures come from simulation, not real riding.** Detector thresholds are tuned on simulated data. Calibrate them against a few real rides on your bike (`DEFAULTS` in `analytics.js`).
+- The ride score and its weights are a heuristic I chose, not an industry standard.
 - Clutch-time resolution is limited by the OBD poll rate: K-line ELM327 gives ~5 rpm samples/s, so ±100–200 ms.
 - Wrong-way detection is manual (you tap). Automatic detection would need an on-device vehicle detector and lane geometry.

@@ -1,5 +1,4 @@
 import { createAnalyzer, comfortClass } from './analytics.js';
-import { createSimulator } from './simulator.js';
 import { Elm327, bleTransport, wsTransport } from './obd.js';
 import { requestMotionPermission, startMotion, startGps, keepAwake } from './sensors.js';
 import { StripChart, FrictionCircle, lineChart, barChart, histogram } from './charts.js';
@@ -48,7 +47,7 @@ $('tabbar').addEventListener('click', (e) => { const b = e.target.closest('butto
 
 // ---------------- live state ----------------
 let analyzer = createAnalyzer({ invertYaw: settings.invertYaw });
-let recording = false, rideId = null, stopFns = [], sim = null, elm = null;
+let recording = false, rideId = null, stopFns = [], elm = null;
 const lastSeen = { gps: 0, imu: 0, obd: 0 };
 let unsubEvents = null;
 
@@ -137,7 +136,7 @@ function resetLive() {
   livePath?.setLatLngs([]); liveLayer?.clearLayers();
 }
 
-async function startRide({ simulate = false } = {}) {
+async function startRide() {
   if (recording) return;
   resetLive();
   rideId = uid();
@@ -146,14 +145,6 @@ async function startRide({ simulate = false } = {}) {
   $('recLabel').textContent = 'Stop';
   keepAwake(true);
   show('live');
-  if (simulate) {
-    sim = createSimulator({ seed: Math.floor(Math.random() * 1e6), onImu: feedImu, onGps: feedGps, onObd: elm ? undefined : feedObd });
-    // real time: 20 ms of simulated riding per 20 ms of wall clock
-    const iv = setInterval(() => sim.step(0.02), 20);
-    stopFns.push(() => { clearInterval(iv); sim = null; });
-    setBanner('Simulated ride — data is synthetic.');
-    return;
-  }
   try { await requestMotionPermission(); stopFns.push(startMotion(feedImu)); } catch (e) { setBanner(`Motion sensors: ${e.message}`); }
   try {
     stopFns.push(startGps(feedGps, (e) => setBanner(`GPS: ${e.message}. Allow precise location for this site.`)));
@@ -168,25 +159,23 @@ async function stopRide() {
   $('recBtn').setAttribute('aria-pressed', 'false');
   $('recLabel').textContent = 'Start ride';
   setBanner('');
-  const wasSim = !!sim;
   stopFns.forEach((f) => f()); stopFns = [];
-  const ride = packRide(rideId, analyzer, wasSim);
+  const ride = packRide(rideId, analyzer);
   if (ride.summary.distanceKm < 0.05 && ride.timeline.length < 20) { toast('Ride too short to save'); return; }
   await db.put('rides', ride);
   toast('Ride saved');
   openRide(ride);
 }
 
-function packRide(id, an, simulated) {
+function packRide(id, an) {
   return {
-    id, simulated, savedAt: Date.now(),
+    id, savedAt: Date.now(),
     summary: an.summary(), events: an.events, track: an.track, timeline: an.timeline,
     gears: an.gears,
   };
 }
 
 $('recBtn').addEventListener('click', () => (recording ? stopRide() : startRide()));
-$('simBtn').addEventListener('click', () => { if (recording) stopRide(); startRide({ simulate: true }); });
 
 function setBanner(msg) { const b = $('banner'); b.hidden = !msg; b.textContent = msg; }
 
@@ -201,7 +190,6 @@ function arcPath(f0, f1) {
 }
 let rpmMax = 10000;
 $('rpmTrack').setAttribute('d', arcPath(0, 1));
-$('rpmRed').setAttribute('d', arcPath(0.85, 1));
 
 let lastDom = 0, lastStrip = 0;
 function frame(now) {
@@ -315,18 +303,17 @@ $('testServer').addEventListener('click', async () => {
 const SCORE_STATUS = (v) => (v >= 80 ? ['good', 'Excellent'] : v >= 60 ? ['warning', 'Good'] : v >= 40 ? ['serious', 'Needs work'] : ['critical', 'Risky']);
 let reportMap = null;
 
+// Measured facts only. No advice that isn't backed by this ride's own data.
 function insights(ride) {
   const s = ride.summary, out = [];
   const km = Math.max(s.distanceKm, 0.1);
-  const brakeRate = (s.hardBrakes / km) * 10;
-  if (s.hardBrakes) out.push(`<b>${s.hardBrakes} hard brake${s.hardBrakes > 1 ? 's' : ''}</b> (${brakeRate.toFixed(1)} per 10 km). Most hard stops come from closing in too fast. A 3-second gap and looking two vehicles ahead cut them sharply.`);
-  else out.push('<b>No hard braking.</b> You read traffic well.');
-  if (s.scores.avgShiftMs) out.push(`Average clutch time per shift is <b>${s.scores.avgShiftMs} ms</b>${s.scores.avgShiftMs > 600 ? '. Above 600 ms the drive cuts out long enough to pitch the bike. Try a quicker, firmer lever pull and blipping the throttle on downshifts.' : '. Your shifts are crisp.'}`);
-  if (s.clutchPct != null && s.clutchPct > 8) out.push(`Clutch disengaged <b>${s.clutchPct}%</b> of moving time. Coasting with the clutch in lowers engine-braking control and wears the throwout bearing.`);
-  if (s.potholes + s.bumps) out.push(`<b>${s.potholes} pothole${s.potholes === 1 ? '' : 's'}</b> and <b>${s.bumps} bump${s.bumps === 1 ? '' : 's'}</b> logged with GPS position. Severe ones are worth reporting to your municipal grievance portal.`);
-  if (s.avgRoughness != null) { const c = comfortClass(s.avgRoughness); out.push(`Average road vibration is ${s.avgRoughness} m/s² RMS, which ISO 2631 rates as "${c.label.toLowerCase()}" (indicative, unweighted).`); }
-  if (s.maxCoolant != null && s.maxCoolant >= 100) out.push(`Coolant peaked at <b>${fmtTemp(s.maxCoolant)}</b>. Check coolant level and fan operation if it happens in normal traffic.`);
-  if (Math.max(s.maxLeanLeft, s.maxLeanRight) > 0) out.push(`Peak lean was ${s.maxLeanLeft}° left and ${s.maxLeanRight}° right${Math.abs(s.maxLeanLeft - s.maxLeanRight) > 10 ? '. A large left/right imbalance often means you are less confident turning one way.' : '.'}`);
+  out.push(`<b>${s.hardBrakes}</b> hard-braking event${s.hardBrakes === 1 ? '' : 's'} (≥ 0.35 g), ${((s.hardBrakes / km) * 10).toFixed(1)} per 10 km.`);
+  if (s.scores.avgShiftMs) out.push(`Average measured clutch time per gear change: <b>${s.scores.avgShiftMs} ms</b> over ${ride.events.filter((e) => e.type === 'shift' && (e.kind === 'upshift' || e.kind === 'downshift')).length} shifts.`);
+  if (s.clutchPct != null) out.push(`Clutch disengaged (or neutral) for <b>${s.clutchPct}%</b> of moving time.`);
+  out.push(`<b>${s.potholes}</b> pothole${s.potholes === 1 ? '' : 's'} and <b>${s.bumps}</b> bump${s.bumps === 1 ? '' : 's'} detected, each with its GPS position in the event log.`);
+  if (s.avgRoughness != null) out.push(`Average vertical vibration: ${s.avgRoughness} m/s² RMS (unweighted; ISO 2631 bands are shown on the map as a rough reference only).`);
+  if (s.maxCoolant != null) out.push(`Highest coolant temperature reported by the ECU: <b>${fmtTemp(s.maxCoolant)}</b>.`);
+  if (Math.max(s.maxLeanLeft, s.maxLeanRight) > 0) out.push(`Peak lean, estimated from gyro × speed: ${s.maxLeanLeft}° left, ${s.maxLeanRight}° right.`);
   return out;
 }
 
@@ -353,8 +340,8 @@ function renderReport(ride) {
         <text x="48" y="48">${s.scores.overall}</text>
       </svg>
       <div style="flex:1;min-width:200px">
-        <h2>${new Date(s.startT).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}${ride.simulated ? ' <span class="muted">(simulated)</span>' : ''}</h2>
-        <div class="muted"><span class="status-pill ${st}">${word}</span> · smoothness ${s.scores.smooth} · braking ${s.scores.braking} · shifting ${s.scores.shifting ?? '—'}</div>
+        <h2>${new Date(s.startT).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</h2>
+        <div class="muted"><span class="status-pill ${st}">${word}</span> · heuristic score · smoothness ${s.scores.smooth} · braking ${s.scores.braking} · shifting ${s.scores.shifting ?? '—'}</div>
       </div>
       <span class="actions"><button class="ghost" data-x="json">JSON</button><button class="ghost" data-x="csv">CSV</button><button class="ghost" data-x="gpx">GPX</button></span>
     </div>
@@ -373,7 +360,7 @@ function renderReport(ride) {
       ${stat('Road roughness', s.avgRoughness ?? '—', s.avgRoughness != null ? 'm/s²' : '')}
     </div>
     <div class="grid report-grid">
-      <article class="card wide"><h3>Coaching</h3><ul class="insights">${insights(ride).map((i) => `<li>${i}</li>`).join('')}</ul></article>
+      <article class="card wide"><h3>What was measured</h3><ul class="insights">${insights(ride).map((i) => `<li>${i}</li>`).join('')}</ul></article>
       <article class="card wide map-card"><div id="reportMap" class="map" style="min-height:360px"></div></article>
       <article class="card wide"><div class="card-head"><h3>Speed</h3><span class="muted">${speedUnit()}</span></div><div class="chart-wrap" id="cSpeed"></div></article>
       <article class="card"><div class="card-head"><h3>Braking &amp; acceleration</h3><span class="muted">g · dashed = hard brake</span></div><div class="chart-wrap" id="cLong"></div></article>
@@ -459,37 +446,23 @@ async function renderHistory() {
   const rides = (await db.all('rides')).sort((a, b) => b.summary.startT - a.summary.startT);
   const list = $('historyList');
   if (!rides.length) {
-    list.innerHTML = `<div class="card"><p class="empty">No rides yet.</p><div class="row"><button id="demoReport">Generate a sample 15-minute ride</button></div></div>`;
-    $('demoReport').addEventListener('click', makeDemoRide);
+    list.innerHTML = '<div class="card"><p class="empty">No rides yet. Recorded rides appear here.</p></div>';
     return;
   }
   list.innerHTML = rides.map((r) => {
     const s = r.summary; const [st] = SCORE_STATUS(s.scores.overall);
     return `<div class="item ride-item" data-id="${r.id}" role="button" tabindex="0">
       <span class="ride-badge" style="color:var(--status-${st})">${s.scores.overall}</span>
-      <span><b>${new Date(s.startT).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</b>${r.simulated ? ' <span class="muted">sim</span>' : ''}<br>
+      <span><b>${new Date(s.startT).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</b><br>
       <span class="muted">${fmtDist(s.distanceKm)} · ${fmtDur(s.endT - s.startT)} · ${s.potholes} potholes · ${s.hardBrakes} hard brakes</span></span>
       <button class="ghost" data-del="${r.id}" aria-label="Delete ride">✕</button></div>`;
-  }).join('') + '<div class="row"><button class="ghost" id="demoReport">+ Sample ride</button></div>';
-  $('demoReport').addEventListener('click', makeDemoRide);
+  }).join('');
   list.onclick = async (e) => {
     const del = e.target.closest('[data-del]');
     if (del) { e.stopPropagation(); if (confirm('Delete this ride?')) { await db.del('rides', del.dataset.del); renderHistory(); } return; }
     const it = e.target.closest('.item'); if (!it) return;
     openRide(await db.get('rides', it.dataset.id));
   };
-}
-
-async function makeDemoRide() {
-  toast('Simulating 15 minutes of riding…');
-  await new Promise((r) => setTimeout(r, 30));
-  const an = createAnalyzer();
-  const s = createSimulator({ seed: Math.floor(Math.random() * 1e6), onImu: (t, a, g) => an.pushImu(t, a, g), onGps: (t, f) => an.pushGps(t, f), onObd: (t, d) => an.pushObd(t, d) });
-  s.state.t = Date.now() - 900e3;
-  for (let i = 0; i < 900 * 50; i++) s.step(0.02);
-  const ride = packRide(uid(), an, true);
-  await db.put('rides', ride);
-  openRide(ride);
 }
 
 $('importBtn').addEventListener('click', () => $('importFile').click());
@@ -650,4 +623,3 @@ $('wsSync').addEventListener('click', async () => {
 
 // ---------------- PWA ----------------
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
-if (new URLSearchParams(location.search).has('demo')) startRide({ simulate: true });

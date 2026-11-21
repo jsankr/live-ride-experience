@@ -30,7 +30,6 @@
           <svg class="dial" viewBox="0 0 220 220" aria-hidden="true">
             <path id="rpmTrack" class="dial-track" />
             <path id="rpmArc" class="dial-arc" />
-            <path id="rpmRed" class="dial-red" />
           </svg>
           <div class="hero-center">
             <div class="speed"><span id="speed">0</span><small>km/h</small></div>
@@ -130,7 +129,7 @@
           <p class="fine">Use an <b>ELM327 BLE</b> dongle (Vgate iCar Pro BLE, Veepeak BLE, OBDLink CX). Classic-Bluetooth dongles do not work in browsers. Most motorcycles need a brand-specific cable from their diagnostic plug to the 16-pin OBD connector.</p>
           <label>Protocol
             <select id="protocol">
-              <option value="0">Auto (cars, some bikes)</option>
+              <option value="0">Auto-detect (recommended: the adapter probes the bike)</option>
               <option value="5">ISO 14230 KWP2000 fast init (most BS6 / Euro 5 bikes, K-line)</option>
               <option value="4">ISO 14230 KWP2000 5-baud init</option>
               <option value="3">ISO 9141-2</option>
@@ -148,9 +147,6 @@
           <label class="check"><input type="checkbox" id="invertYaw"> Invert lean direction (if left/right look swapped)</label>
           <label>Units <select id="units"><option value="metric">km/h, °C, m</option><option value="imperial">mph, °F, ft</option></select></label>
           <label>Theme <select id="theme"><option value="">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
-          <h3>Demo</h3>
-          <div class="row"><button id="simBtn">Run simulated ride</button></div>
-          <p class="fine">Replays a synthetic ride (IMU + GPS + OBD) through the same analytics so you can explore every screen without a bike.</p>
         </article>
         <article class="card">
           <h3>Report server (optional)</h3>

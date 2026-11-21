@@ -117,7 +117,6 @@ main { max-width: 1280px; margin: 0 auto; padding: 16px; }
 .dial { width: min(100%, 320px); grid-area: 1 / 1; }
 .dial-track { fill: none; stroke: var(--grid); stroke-width: 14; stroke-linecap: round; }
 .dial-arc { fill: none; stroke: var(--series-1); stroke-width: 14; stroke-linecap: round; transition: d .1s linear; }
-.dial-red { fill: none; stroke: var(--status-critical); stroke-width: 14; opacity: .35; }
 .hero-center { grid-area: 1 / 1; text-align: center; }
 .speed { font-size: clamp(64px, 18vw, 96px); font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.03em; }
 .speed small { display: block; font-size: 14px; font-weight: 600; color: var(--text-secondary); letter-spacing: .08em; margin-top: 4px; }

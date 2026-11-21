@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createAnalyzer, G, comfortClass, haversine } from '../public/js/analytics.js';
-import { createSimulator } from '../public/js/simulator.js';
+import { createSimulator } from './simulator.js';
 
 function runSim({ seconds = 900, seed = 7, obd = true } = {}) {
   const an = createAnalyzer();
