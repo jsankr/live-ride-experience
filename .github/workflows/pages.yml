@@ -27,6 +27,7 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     permissions:
+      contents: read   # a job-level block replaces the defaults; checkout needs this
       pages: write
       id-token: write
     environment:
