@@ -2,9 +2,32 @@
 
 A phone-first PWA (Progressive Web App) that captures every ride live and turns it into a coaching-grade report: potholes, bumps, road roughness, braking, acceleration, jerk, lean angle, g-force, altitude, gear and clutch timing, and engine temperatures. It also includes a **wrong-side vehicle reporter**, which captures photos, plate, location and time into a database.
 
+## Run it on your phone (no laptop)
+RideLens runs entirely in the phone's browser. Rides and reports are stored on the phone (IndexedDB) and it keeps working offline once loaded.
+
+1. **Host it once over HTTPS** (phones only allow sensors, camera and Bluetooth on HTTPS pages). `.github/workflows/pages.yml` publishes `public/` to GitHub Pages on every push to `main`:
+   - Repo **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+   - GitHub Pages on a *private* repo requires a paid GitHub plan; on the free plan the repo must be public. Your ride data is never in the repo.
+   - Your URL: `https://<user>.github.io/live-ride-experience-/`
+2. Open the URL on the phone → **Setup** → *Grant motion, location & camera*. The *This phone & browser* card shows what works on that exact device.
+3. Optional: add to home screen (Chrome: ⋮ → *Add to Home screen*; Safari: Share → *Add to Home Screen*).
+4. Mount the phone, tap **Start ride**, keep the screen on and RideLens in front.
+
+### What each browser can do
+| | Chrome (Android) | Firefox (Android) | Safari / any iPhone browser |
+|---|---|---|---|
+| GPS, motion sensors, lean, potholes, braking, maps, reports | ✓ | ✓ | ✓ (asks for Motion permission) |
+| Wrong-side camera capture | ✓ | ✓ | ✓ |
+| **OBD-II over Bluetooth LE** (rpm, gear, clutch, coolant) | ✓ | ✗ no Web Bluetooth | ✗ no Web Bluetooth |
+
+These are browser-engine limits, not app limits. Engine data needs **Chrome on Android**. Every browser stops delivering sensor data when the screen is off or the app is in the background.
+
+The browser matrix above comes from published Web Bluetooth support; the app itself has been tested only in Chromium (including iPhone-size emulation), not on a physical phone or in Firefox/Safari engines.
+
+### Developer use (optional)
 ```
-npm start            # http://localhost:8080 (zero dependencies, Node ≥ 22.5)
-npm test             # 19 tests: detectors vs simulator ground truth, OBD parser, server, Wi-Fi bridge
+npm start            # local server on http://localhost:8080 (Node ≥ 22.5), also the optional report DB + Wi-Fi OBD bridge
+npm test             # 21 tests: detectors vs simulator ground truth, OBD parser, server, Wi-Fi bridge
 ```
 
 **No synthetic data in the app.** Every number on screen comes from your phone's sensors or the bike's ECU. There is no demo or sample mode. The ride simulator lives in `test/` only and is used solely to score the detectors in automated tests.

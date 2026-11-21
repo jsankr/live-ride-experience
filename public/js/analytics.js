@@ -38,7 +38,9 @@ export const DEFAULTS = {
   clutchMaxMs: 4000,
   overheatC: 105,
   mountLearnWeight: 10,     // evidence needed before trusting the learned forward axis
-  invertYaw: false,         // some phones/browsers report gyro with flipped sign
+  // Gyro sign conventions differ between browsers (e.g. iOS vs Android). By default the
+  // sign is learned from GPS heading changes; set true/false only to force it.
+  invertYaw: null,
 };
 
 // ISO 2631-1 Annex C comfort reactions (overall vibration, m/s^2 r.m.s.).
@@ -91,7 +93,8 @@ export function createAnalyzer(options = {}) {
     jerkSq: 0, jerkN: 0,
     vert: 0, vertBase: null, vertBuf: [], roughRms: 0, roughSqSum: 0, roughN: 0,
     yawRate: 0, gyroYaw: null, gyroYawT: 0, lean: 0, maxLeanL: 0, maxLeanR: 0,
-    gpsYaw: null, gpsYawT: 0,
+    gpsYaw: null, gpsYawT: 0, gyroSum: 0, gyroN: 0, yawCorr: 0,
+    yawSign: options.invertYaw == null ? 0 : options.invertYaw ? -1 : 1, // 0 = not learned yet
     // speed
     speed: 0, speedSrc: 'none', speedHist: [], refAccel: null, refAccelT: 0, obdSpeedT: 0,
     maxSpeed: 0, speedSum: 0, speedN: 0,
@@ -205,12 +208,15 @@ export function createAnalyzer(options = {}) {
     // 4. yaw rate & lean angle
     if (gyro && (gyro.x || gyro.y || gyro.z)) {
       const w = scale(gyro, D2R);
-      s.gyroYaw = -dot(w, s.up) * (cfg.invertYaw ? -1 : 1); s.gyroYawT = t; // + = right turn
+      const raw = -dot(w, s.up);
+      s.gyroSum += raw; s.gyroN++;
+      s.gyroYaw = raw * (s.yawSign || 1); s.gyroYawT = t; // + = right turn once sign is known
     }
     // The phone is fixed to the bike, so the gyro measures yaw about the *bike's*
     // up axis: w_meas = w * cos(lean). With tan(lean) = v*w/g this gives
     // v*w_meas/g = sin(lean)  ->  lean = asin(v*w_meas/g). GPS yaw is world-frame -> atan.
-    const useGyro = s.gyroYaw != null && t - s.gyroYawT < 500;
+    // until the gyro's sign is learned, fall back to GPS heading rate (slower but sign-safe)
+    const useGyro = s.yawSign !== 0 && s.gyroYaw != null && t - s.gyroYawT < 500;
     const yaw = useGyro ? s.gyroYaw : s.gpsYaw != null && t - s.gpsYawT < 3000 ? s.gpsYaw : 0;
     s.yawRate = ema(s.yawRate, yaw, dt, 0.25);
     const m = (s.speed * s.yawRate) / G;
@@ -303,12 +309,16 @@ export function createAnalyzer(options = {}) {
   function pushGps(t, fix) {
     if (s.startT == null) s.startT = t;
     const prev = s.fix;
-    let speed = fix.speed;
+    // Safari reports -1 / NaN for "unknown" speed and heading; normalise to null
+    let speed = Number.isFinite(fix.speed) && fix.speed >= 0 ? fix.speed : null;
+    fix = { ...fix, heading: Number.isFinite(fix.heading) && fix.heading >= 0 ? fix.heading : null };
     if (prev && fix.accuracy != null && fix.accuracy < 30) {
       const d = haversine(prev.lat, prev.lon, fix.lat, fix.lon);
       const dts = (t - prev.t) / 1000;
-      if (speed == null && dts > 0) speed = d / dts;
-      if ((speed ?? 0) > 0.8 || d > 5) s.distance += d;
+      if (speed == null && dts >= 0.5) speed = d / dts;
+      if (speed != null && speed > 100) speed = null; // > 360 km/h: a GPS jump, not motion
+      const jump = dts > 0 && d / dts > 100;
+      if (!jump && ((speed ?? 0) > 0.8 || d > 5)) s.distance += d;
     }
     let heading = fix.heading;
     if ((heading == null || Number.isNaN(heading)) && prev) {
@@ -321,7 +331,13 @@ export function createAnalyzer(options = {}) {
       const dts = (t - prev.t) / 1000;
       // + yaw = turning right (heading grows clockwise); + lean = leaning right
       if (dts > 0) { s.gpsYaw = angleDiff(heading, prev.heading) * D2R / dts; s.gpsYawT = t; }
+      // learn the gyro sign: correlate mean gyro yaw over this GPS interval with GPS yaw
+      if (dts > 0 && s.gyroN > 5 && Math.abs(s.gpsYaw) > 0.05 && cfg.invertYaw == null) {
+        s.yawCorr += (s.gyroSum / s.gyroN) * s.gpsYaw;
+        if (Math.abs(s.yawCorr) > 0.05) s.yawSign = s.yawCorr > 0 ? 1 : -1;
+      }
     }
+    s.gyroSum = 0; s.gyroN = 0;
     s.fix = { ...fix, heading, t };
     if (speed != null) pushSpeed(t, speed, 'gps');
 
@@ -456,6 +472,7 @@ export function createAnalyzer(options = {}) {
       obd: { ...s.obd, fresh: Date.now() - s.obdT < 3000 },
       gear: s.engaged ? s.gear : null, clutchIn: !!s.clutch, gearsLearned: s.gears.length,
       mountLearned: !!(s.fwd && s.fwdWeight > cfg.mountLearnWeight),
+      yawSignLearned: s.yawSign !== 0,
       scores: scores(),
     };
   }

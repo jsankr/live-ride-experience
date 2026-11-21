@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import { createAnalyzer, G, comfortClass, haversine } from '../public/js/analytics.js';
 import { createSimulator } from './simulator.js';
 
-function runSim({ seconds = 900, seed = 7, obd = true } = {}) {
+function runSim({ seconds = 900, seed = 7, obd = true, flip = false } = {}) {
   const an = createAnalyzer();
+  const f = flip ? -1 : 1;
   const sim = createSimulator({
     seed,
-    onImu: (t, a, g) => an.pushImu(t, a, g),
+    onImu: (t, a, g) => an.pushImu(t, flip ? { x: -a.x, y: -a.y, z: -a.z } : a, g),
     onGps: (t, f) => an.pushGps(t, f),
     onObd: obd ? (t, d) => an.pushObd(t, d) : undefined,
   });
@@ -81,4 +82,34 @@ test('detector counts hold across different random rides', () => {
     assert.ok(Math.abs(c('pothole') + c('bump') - sm.truth.potholes - sm.truth.bumps) <= 3, `seed ${seed} impacts`);
     assert.ok(c('accel') <= 1, `seed ${seed} false accels ${c('accel')}`);
   }
+});
+
+test('learns the gyro sign automatically (browsers disagree on accelerometer sign)', () => {
+  for (const flip of [false, true]) {
+    const an = createAnalyzer();
+    const sim = createSimulator({
+      seed: 5,
+      onImu: (t, a, g) => an.pushImu(t, flip ? { x: -a.x, y: -a.y, z: -a.z } : a, g),
+      onGps: (t, f) => an.pushGps(t, f), onObd: (t, d) => an.pushObd(t, d),
+    });
+    let agree = 0, n = 0;
+    for (let i = 0; i < 600 * 50; i++) {
+      sim.step(0.02);
+      const truth = sim.state.lean * 180 / Math.PI;
+      if (i > 120 * 50 && i % 10 === 0 && Math.abs(truth) > 8) { n++; if (Math.sign(an.snapshot().lean) === Math.sign(truth)) agree++; }
+    }
+    assert.ok(an.snapshot().yawSignLearned, `sign learned (flip=${flip})`);
+    assert.ok(n > 50 && agree / n > 0.95, `flip=${flip}: left/right agreement ${agree}/${n}`);
+  }
+});
+
+test('ignores Safari-style invalid GPS values and position jumps', () => {
+  const a = createAnalyzer();
+  const t0 = 1e12;
+  a.pushGps(t0, { lat: 12.97, lon: 77.59, alt: 900, speed: -1, heading: -1, accuracy: 5 });
+  a.pushGps(t0 + 1000, { lat: 12.97, lon: 77.59005, alt: 900, speed: -1, heading: -1, accuracy: 5 }); // ~5.4 m in 1 s
+  assert.ok(Math.abs(a.snapshot().speedKmh - 19.5) < 1.5, `computed ${a.snapshot().speedKmh}`);
+  a.pushGps(t0 + 2000, { lat: 12.98, lon: 77.59005, alt: 900, speed: null, heading: null, accuracy: 5 }); // 1.1 km jump
+  assert.ok(a.snapshot().speedKmh < 25, `jump rejected: ${a.snapshot().speedKmh}`);
+  assert.ok(a.snapshot().distanceKm < 0.05, 'jump not added to distance');
 });

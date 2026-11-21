@@ -4,8 +4,9 @@ export async function requestMotionPermission() {
   // iOS 13+ requires an explicit user-gesture permission request
   const DM = window.DeviceMotionEvent;
   if (DM && typeof DM.requestPermission === 'function') {
+    // iOS answers 'granted'/'denied'; some Chromium builds answer 'prompt' and still deliver events
     const r = await DM.requestPermission();
-    if (r !== 'granted') throw new Error('Motion permission denied');
+    if (r === 'denied') throw new Error('Motion permission denied. Allow "Motion & Orientation Access" for this site.');
   }
 }
 
@@ -18,7 +19,10 @@ export function startMotion(onSample) {
     const r = e.rotationRate;
     // rotationRate: alpha = about z, beta = about x, gamma = about y (deg/s)
     const gyro = r && r.alpha != null ? { x: r.beta, y: r.gamma, z: r.alpha } : null;
-    onSample(Math.round(origin + e.timeStamp), { x: a.x, y: a.y, z: a.z }, gyro);
+    // timeStamp is relative to timeOrigin in current browsers; some older ones gave epoch ms
+    const ts = e.timeStamp;
+    const t = !Number.isFinite(ts) || ts === 0 ? Date.now() : ts > 1e12 ? ts : origin + ts;
+    onSample(Math.round(t), { x: a.x, y: a.y, z: a.z }, gyro);
   };
   window.addEventListener('devicemotion', handler);
   return () => window.removeEventListener('devicemotion', handler);

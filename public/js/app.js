@@ -10,9 +10,14 @@ const G = 9.80665;
 
 // ---------------- settings ----------------
 const settings = (() => {
-  const def = { protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: false };
-  try { return { ...def, ...JSON.parse(localStorage.getItem('ridelens.settings') || '{}') }; } catch { return def; }
+  const def = { protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: '' };
+  try {
+    const v = { ...def, ...JSON.parse(localStorage.getItem('ridelens.settings') || '{}') };
+    if (typeof v.invertYaw === 'boolean') v.invertYaw = v.invertYaw ? 'invert' : ''; // migrate old checkbox
+    return v;
+  } catch { return def; }
 })();
+const yawOpt = () => (settings.invertYaw === 'invert' ? true : settings.invertYaw === 'normal' ? false : null);
 const saveSettings = () => { try { localStorage.setItem('ridelens.settings', JSON.stringify(settings)); } catch { /* private mode */ } };
 const imperial = () => settings.units === 'imperial';
 const fmtSpeed = (kmh) => Math.round(imperial() ? kmh * 0.621371 : kmh);
@@ -46,7 +51,7 @@ function show(view) {
 $('tabbar').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) show(b.dataset.view); });
 
 // ---------------- live state ----------------
-let analyzer = createAnalyzer({ invertYaw: settings.invertYaw });
+let analyzer = createAnalyzer({ invertYaw: yawOpt() });
 let recording = false, rideId = null, stopFns = [], elm = null;
 const lastSeen = { gps: 0, imu: 0, obd: 0 };
 let unsubEvents = null;
@@ -127,7 +132,7 @@ const feedGps = (t, f) => { lastSeen.gps = Date.now(); analyzer.pushGps(t, f); }
 const feedObd = (t, d) => { lastSeen.obd = Date.now(); analyzer.pushObd(t, d); };
 
 function resetLive() {
-  analyzer = createAnalyzer({ invertYaw: settings.invertYaw });
+  analyzer = createAnalyzer({ invertYaw: yawOpt() });
   wireAnalyzer();
   Object.values(charts).forEach((c) => { c.data = []; c.marks = []; });
   gcircle.trail = [];
@@ -144,10 +149,23 @@ async function startRide() {
   $('recBtn').setAttribute('aria-pressed', 'true');
   $('recLabel').textContent = 'Stop';
   keepAwake(true);
+  setBanner('');
   show('live');
-  try { await requestMotionPermission(); stopFns.push(startMotion(feedImu)); } catch (e) { setBanner(`Motion sensors: ${e.message}`); }
+  // Ask, but judge by whether data actually arrives: permission answers differ between browsers.
+  const t0 = Date.now();
+  let permErr = null;
+  try { await requestMotionPermission(); } catch (e) { permErr = e.message; }
+  try { stopFns.push(startMotion(feedImu)); } catch (e) { setBanner(`Motion sensors: ${e.message}`); }
+  const check = setTimeout(() => {
+    if (recording && lastSeen.imu < t0) setBanner(`No motion-sensor data received. ${permErr || 'Allow motion access for this site in the browser settings.'}`);
+  }, 3000);
+  stopFns.push(() => clearTimeout(check));
   try {
-    stopFns.push(startGps(feedGps, (e) => setBanner(`GPS: ${e.message}. Allow precise location for this site.`)));
+    stopFns.push(startGps(feedGps, (e) => {
+      // timeouts happen while the GPS is still acquiring; only report denial or a GPS that never delivered
+      if (e.code === 1) setBanner('GPS: permission denied. Allow precise location for this site.');
+      else if (lastSeen.gps < t0) setBanner(`GPS: no fix yet (${e.message || 'unavailable'}). Ride with a clear view of the sky.`);
+    }));
   } catch (e) { setBanner(e.message); }
   if (!elm) setBanner('No OBD adapter connected — riding on phone sensors only (no rpm, gear, clutch or temperatures). Connect one in Setup.');
 }
@@ -177,7 +195,12 @@ function packRide(id, an) {
 
 $('recBtn').addEventListener('click', () => (recording ? stopRide() : startRide()));
 
-function setBanner(msg) { const b = $('banner'); b.hidden = !msg; b.textContent = msg; }
+// banner collects every problem from this ride start instead of showing only the last one
+const bannerMsgs = new Set();
+function setBanner(msg) {
+  if (!msg) bannerMsgs.clear(); else bannerMsgs.add(msg);
+  const b = $('banner'); b.hidden = !bannerMsgs.size; b.innerHTML = [...bannerMsgs].map(esc).join('<br>');
+}
 
 // ---------------- render loop ----------------
 const ARC = { cx: 110, cy: 110, r: 92, a0: 135, a1: 405 };
@@ -622,4 +645,42 @@ $('wsSync').addEventListener('click', async () => {
 });
 
 // ---------------- PWA ----------------
+// ---------------- capability check (real, per device) ----------------
+async function renderCaps() {
+  const ua = navigator.userAgent;
+  const iOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const perm = async (name) => { try { return (await navigator.permissions.query({ name })).state; } catch { return null; } };
+  const geoPerm = await perm('geolocation'), camPerm = await perm('camera');
+  const caps = [
+    ['Secure page (HTTPS)', window.isSecureContext, window.isSecureContext ? '' : 'Sensors, camera and Bluetooth are blocked on non-HTTPS pages'],
+    ['Motion sensors', 'DeviceMotionEvent' in window, ''],
+    ['GPS', 'geolocation' in navigator && geoPerm !== 'denied', geoPerm === 'denied' ? 'Permission denied: allow location for this site in browser settings' : ''],
+    ['Camera', !!navigator.mediaDevices?.getUserMedia && camPerm !== 'denied', camPerm === 'denied' ? 'Permission denied: allow camera for this site in browser settings' : ''],
+    ['Bluetooth LE (OBD)', !!navigator.bluetooth, navigator.bluetooth ? '' : iOS ? 'Not available in any iPhone/iPad browser' : 'Not available in this browser (Chrome on Android supports it)'],
+    ['Keep screen awake', 'wakeLock' in navigator, 'wakeLock' in navigator ? '' : 'Set Auto-Lock to "Never" in phone settings while riding'],
+    ['Offline storage', 'indexedDB' in window, ''],
+    ['Share to apps', !!navigator.share, ''],
+  ];
+  $('caps').innerHTML = caps.map(([n, ok, note]) => `<li class="${ok ? 'ok' : 'no'}"><span class="status-pill ${ok ? 'good' : ''}">${ok ? 'Yes' : 'No'}</span><span>${n}${note ? `<br><span class="muted">${note}</span>` : ''}</span></li>`).join('');
+  const note = $('bleNote');
+  if (!navigator.bluetooth) {
+    note.hidden = false;
+    note.textContent = iOS
+      ? 'This browser cannot connect to Bluetooth adapters, and no iPhone browser can. Everything else (GPS, motion, camera, reports) works; engine data needs an Android phone running Chrome.'
+      : 'This browser cannot connect to Bluetooth adapters. Open RideLens in Chrome on Android for engine data. Everything else works here.';
+    $('bleBtn').disabled = true;
+  }
+}
+renderCaps();
+$('permBtn').addEventListener('click', async () => {
+  const out = [];
+  try { await requestMotionPermission(); out.push('motion ✓'); } catch (e) { out.push(`motion ✗ (${e.message})`); }
+  await new Promise((res) => {
+    if (!navigator.geolocation) { out.push('location ✗'); res(); return; }
+    navigator.geolocation.getCurrentPosition(() => { out.push('location ✓'); res(); }, (e) => { out.push(`location ✗ (${e.message})`); res(); }, { enableHighAccuracy: true, timeout: 15000 });
+  });
+  try { const st = await navigator.mediaDevices.getUserMedia({ video: true }); st.getTracks().forEach((t) => t.stop()); out.push('camera ✓'); } catch (e) { out.push(`camera ✗ (${e.name})`); }
+  toast(out.join(' · '), 5000); renderCaps();
+});
+
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});

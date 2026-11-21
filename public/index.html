@@ -4,6 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0d0d0d" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="RideLens" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <title>RideLens</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
@@ -125,32 +130,45 @@
     <section id="view-setup" class="view" aria-label="Setup">
       <div class="grid setup-grid">
         <article class="card">
+          <h3>This phone &amp; browser</h3>
+          <p class="fine">Checked live on this device. Grey items are not offered by this browser.</p>
+          <ul class="caps" id="caps"></ul>
+          <div class="row"><button class="ghost" id="permBtn">Grant motion, location &amp; camera</button></div>
+          <p class="fine">Browsers pause sensors when the screen turns off or you switch apps. During a ride keep RideLens open and in front. The app keeps the screen awake where the browser allows it.</p>
+        </article>
+        <article class="card">
           <h3>OBD-II adapter</h3>
-          <p class="fine">Use an <b>ELM327 BLE</b> dongle (Vgate iCar Pro BLE, Veepeak BLE, OBDLink CX). Classic-Bluetooth dongles do not work in browsers. Most motorcycles need a brand-specific cable from their diagnostic plug to the 16-pin OBD connector.</p>
+          <p class="fine">Needs an ELM327-compatible adapter that uses <b>Bluetooth LE</b>. Classic-Bluetooth adapters cannot be reached from any browser.</p>
+          <p class="fine" id="bleNote" hidden></p>
           <label>Protocol
             <select id="protocol">
               <option value="0">Auto-detect (recommended: the adapter probes the bike)</option>
-              <option value="5">ISO 14230 KWP2000 fast init (most BS6 / Euro 5 bikes, K-line)</option>
+              <option value="5">ISO 14230 KWP2000 fast init</option>
               <option value="4">ISO 14230 KWP2000 5-baud init</option>
               <option value="3">ISO 9141-2</option>
               <option value="6">ISO 15765 CAN 11-bit 500k</option>
             </select>
           </label>
           <div class="row"><button id="bleBtn">Connect Bluetooth LE</button><button class="ghost" id="obdStop">Disconnect</button></div>
-          <label>Wi-Fi bridge URL <input id="bridgeUrl" placeholder="ws://127.0.0.1:8080/obd?host=192.168.0.10&port=35000"></label>
-          <div class="row"><button class="ghost" id="wifiBtn">Connect via Wi-Fi bridge</button></div>
+          <details class="fine"><summary>Wi-Fi adapter (advanced)</summary>
+            <p>Browsers cannot talk to Wi-Fi OBD adapters directly. This only works if the RideLens server runs on a device joined to the adapter's Wi-Fi.</p>
+            <label>Wi-Fi bridge URL <input id="bridgeUrl" placeholder="ws://127.0.0.1:8080/obd?host=192.168.0.10&port=35000"></label>
+            <div class="row"><button class="ghost" id="wifiBtn">Connect via Wi-Fi bridge</button></div>
+          </details>
           <pre class="log" id="obdLog"></pre>
         </article>
         <article class="card">
           <h3>Phone mount &amp; sensors</h3>
           <p class="fine">Mount the phone rigidly (vibration-damped mount). Orientation does not matter: RideLens learns "up" when you are stationary and "forward" from your first few speed changes.</p>
-          <label class="check"><input type="checkbox" id="invertYaw"> Invert lean direction (if left/right look swapped)</label>
+          <label>Lean left/right direction
+            <select id="invertYaw"><option value="">Automatic (learned from GPS turns)</option><option value="normal">Force normal</option><option value="invert">Force inverted</option></select>
+          </label>
           <label>Units <select id="units"><option value="metric">km/h, °C, m</option><option value="imperial">mph, °F, ft</option></select></label>
           <label>Theme <select id="theme"><option value="">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
         </article>
         <article class="card">
           <h3>Report server (optional)</h3>
-          <p class="fine">Reports stay on this phone unless you sync them. Run <code>node server/server.mjs</code> to keep a shared SQLite database.</p>
+          <p class="fine">Not needed: rides and reports are stored on this phone. Only set this if you run the RideLens server somewhere to collect reports centrally.</p>
           <label>Server URL <input id="serverUrl" placeholder="https://your-server:8080"></label>
           <label>API token <input id="serverToken" type="password" autocomplete="off"></label>
           <div class="row"><button class="ghost" id="testServer">Test connection</button><span id="serverStatus" class="muted"></span></div>
