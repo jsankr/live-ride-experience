@@ -69,5 +69,5 @@ test/              node:test suites + simulator.js (test-only ground truth)
 ## Known limits
 - **All accuracy figures come from simulation, not real riding.** Detector thresholds are tuned on simulated data. Calibrate them against a few real rides on your bike (`DEFAULTS` in `analytics.js`).
 - The ride score and its weights are a heuristic I chose, not an industry standard.
-- Clutch-time resolution is limited by the OBD poll rate: K-line ELM327 gives ~5 rpm samples/s, so ±100–200 ms.
+- Clutch-time resolution is limited by the OBD poll rate. At an estimated ~5 rpm samples/s that is roughly ±100–200 ms; check your adapter's real rate in the OBD log.
 - Wrong-way detection is manual (you tap). Automatic detection would need an on-device vehicle detector and lane geometry.
