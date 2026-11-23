@@ -44,13 +44,13 @@ await page.waitForFunction(() => window.__h);
 
 // helpers inside the page
 await page.evaluate(() => {
-  window.__sim = async ({ seed, minutes, endAt, startLat = 12.9716, startLon = 77.5946, keepRunning = false }) => {
+  window.__sim = async ({ seed, minutes, endAt, startLat = 12.9716, startLon = 77.5946, keepRunning = false, obd = true }) => {
     const { createSimulator } = await import('/__sim.js');
     const h = window.__h;
-    h.setElm({ close() {} });
+    h.setElm(obd ? { close() {} } : null);
     await h.startRide();
     const sim = createSimulator({ seed, startLat, startLon,
-      onImu: (t, a, g) => h.feedImu(t, a, g), onGps: (t, f) => h.feedGps(t, f), onObd: (t, d) => h.feedObd(t, d) });
+      onImu: (t, a, g) => h.feedImu(t, a, g), onGps: (t, f) => h.feedGps(t, f), onObd: obd ? (t, d) => h.feedObd(t, d) : null });
     sim.state.t = endAt - minutes * 60000;
     const dt = 0.02;
     while (sim.state.t < endAt) { for (let i = 0; i < 3000 && sim.state.t < endAt; i++) sim.step(dt); await new Promise((r) => setTimeout(r)); }
@@ -137,6 +137,14 @@ await shot('wrongside-report-sheet');
 await page.keyboard.press('Escape');
 await page.evaluate(() => window.__h.show('setup')); await page.waitForTimeout(800);
 await shot('setup-phone-dark', { fullPage: true });
+
+// phone-only ride (no OBD adapter): shows what a rider without an adapter sees
+await page.evaluate(async (a) => { await window.__sim(a); }, { seed: 19, minutes: 12, endAt: Date.now(), keepRunning: true, obd: false });
+await page.evaluate(() => window.__h.show('live'));
+await page.waitForTimeout(32000);
+await page.waitForFunction(() => { const s = window.__h.analyzer.snapshot(); return s.speedKmh > 35 && Math.abs(s.lean) > 8; }, null, { timeout: 90000, polling: 100 }).catch(() => {});
+await shot('live-phone-no-obd');
+await page.evaluate(async () => { clearInterval(window.__live); });
 
 await browser.close(); server.kill();
 console.log('done');

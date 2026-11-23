@@ -6,7 +6,7 @@ A phone-first PWA (Progressive Web App) that captures every ride live and turns 
 
 > **All readings below are simulated.** The app has no demo mode, so these were made by `scripts/screenshots.mjs`. It streams `test/simulator.js` (phone IMU, GPS and an OBD-II ECU) through the app's real sensor-fusion and event-detection code. The wrong-side "photos" are drawn placeholders stamped *SAMPLE IMAGE*. The simulator is deliberately rough (many potholes and hard brakes), so its ride scores are lower than a typical ride's. Regenerate with `node scripts/screenshots.mjs` (needs Playwright + Chromium).
 
-<p align="center"><img src="docs/screenshots/overview-phone.png" alt="Phone: live dark, live light, ride history, wrong-side report" width="100%"></p>
+<p align="center"><img src="docs/screenshots/overview-phone.png" alt="Phone: live with OBD (dark, light), live phone-only, ride history, wrong-side report" width="100%"></p>
 
 ### Live cockpit
 Speed with an rpm arc, gear and clutch from OBD; lean angle and the G-G friction circle from gyro and GPS; coolant, throttle, altitude, distance, road comfort (ISO 2631 bands) and a live ride score; 30-second strip charts for road shock, braking/acceleration and rpm; an event feed and a live map.
@@ -15,9 +15,11 @@ Speed with an rpm arc, gear and clutch from OBD; lean angle and the G-G friction
 |---|---|
 | <img src="docs/screenshots/live-desktop-dark.png" alt="Live view, desktop, dark"> | <img src="docs/screenshots/live-desktop-light.png" alt="Live view, desktop, light"> |
 
-| Phone · dark | Phone · light | Phone · full page |
-|---|---|---|
-| <img src="docs/screenshots/live-phone-dark.png" alt="Live view, phone, dark" width="260"> | <img src="docs/screenshots/live-phone-light.png" alt="Live view, phone, light" width="260"> | <img src="docs/screenshots/live-phone-dark-full.png" alt="Live view, phone, full page" width="260"> |
+Every tile is labelled with where its number comes from: **Phone** (GPS/IMU), **OBD** (the bike's ECU) or **Fused**. Without an adapter, the engine tiles say *Needs OBD* instead of showing zeros.
+
+| Phone · dark | Phone · light | Phone only (no OBD) | Phone · full page |
+|---|---|---|---|
+| <img src="docs/screenshots/live-phone-dark.png" alt="Live view, phone, dark" width="220"> | <img src="docs/screenshots/live-phone-light.png" alt="Live view, phone, light" width="220"> | <img src="docs/screenshots/live-phone-no-obd.png" alt="Live view, phone sensors only" width="220"> | <img src="docs/screenshots/live-phone-dark-full.png" alt="Live view, phone, full page" width="220"> |
 
 ### Ride report
 Heuristic score and summary stats, insights, a route map coloured by road comfort with every event pinned, then speed, braking, roughness, elevation, lean, rpm and clutch-time charts, event breakdown, learned gear ratios and the full event log. Exports to JSON, CSV and GPX.
@@ -30,6 +32,9 @@ Heuristic score and summary stats, insights, a route map coloured by road comfor
 | Ride history | Wrong-side reports | Report sheet | Setup |
 |---|---|---|---|
 | <img src="docs/screenshots/history-phone-dark.png" alt="Ride history" width="200"> | <img src="docs/screenshots/wrongside-phone-dark.png" alt="Wrong-side reports" width="200"> | <img src="docs/screenshots/wrongside-report-sheet.png" alt="Wrong-side report sheet" width="200"> | <img src="docs/screenshots/setup-phone-dark.png" alt="Setup" width="200"> |
+
+## Design system
+The UI follows the **RideLens Cockpit** design system: role tokens for colour (dark first, plus a daylight theme), Barlow Semi Condensed for readouts, Inter for text and JetBrains Mono for plates and logs. All text meets 4.5:1 contrast in both themes. Tokens live at the top of `public/styles.css`. Web fonts are cached for offline use and fall back to the system font.
 
 ## Run it on your phone (no laptop)
 RideLens runs entirely in the phone's browser. Rides and reports are stored on the phone (IndexedDB) and it keeps working offline once loaded.

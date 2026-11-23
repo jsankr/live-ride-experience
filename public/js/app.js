@@ -203,6 +203,11 @@ function setBanner(msg) {
 }
 
 // ---------------- render loop ----------------
+function setSrc(key, cls, text) {
+  const el = $(`src-${key}`); if (!el) return;
+  if (el.textContent !== text) { el.className = `src ${cls}`; el.textContent = text; }
+  el.closest('.tile')?.classList.toggle('nodata', cls === 'none');
+}
 const ARC = { cx: 110, cy: 110, r: 92, a0: 135, a1: 405 };
 function arcPath(f0, f1) {
   const a = (f) => ((ARC.a0 + (ARC.a1 - ARC.a0) * f) * Math.PI) / 180;
@@ -237,7 +242,16 @@ function frame(now) {
   }
   $('speed').textContent = fmtSpeed(snap.speedKmh);
   document.querySelector('.speed small').textContent = speedUnit();
-  $('speedSrc').textContent = snap.speedSrc === 'none' ? '' : `speed · ${snap.speedSrc}`;
+  const sp = $('speedSrc');
+  sp.className = `speed-src src ${snap.speedSrc === 'obd' ? 'obd' : snap.speedSrc === 'none' ? 'none' : ''}`;
+  sp.textContent = snap.speedSrc === 'none' ? 'No speed yet' : `Speed · ${snap.speedSrc === 'obd' ? 'OBD' : 'GPS'}`;
+  // provenance badges: a phone-only ride shows what is missing instead of zeros
+  const obdLive = !!snap.obd.fresh;
+  for (const k of ['coolant', 'throttle']) {
+    const has = obdLive && (k === 'throttle' ? snap.obd.throttle != null : (snap.obd.coolant ?? snap.obd.oil) != null);
+    setSrc(k, has ? 'obd' : 'none', has ? 'OBD' : 'Needs OBD');
+  }
+  setSrc('score', obdLive ? 'fused' : '', obdLive ? 'Fused' : 'Phone');
   const rpm = snap.obd.fresh ? snap.obd.rpm : null;
   if (rpm != null && rpm > rpmMax * 0.95) rpmMax = Math.ceil(rpm / 1000 + 1) * 1000;
   $('rpm').textContent = rpm != null ? `${Math.round(rpm).toLocaleString()} rpm` : '— rpm';
@@ -250,7 +264,7 @@ function frame(now) {
   if (sum) { $('leanMaxL').textContent = `${sum.maxLeanLeft.toFixed(0)}°`; $('leanMaxR').textContent = `${sum.maxLeanRight.toFixed(0)}°`; $('gPeak').textContent = `${sum.peakG.toFixed(2)} g`; }
   $('gNow').textContent = `${Math.hypot(snap.latG, snap.longG).toFixed(2)} g`;
   $('coolant').textContent = fmtTemp(snap.obd.coolant ?? snap.obd.oil);
-  $('coolantHint').textContent = snap.obd.oil != null && snap.obd.coolant == null ? 'oil temp' : snap.obd.intake != null ? `intake ${fmtTemp(snap.obd.intake)}` : 'engine temp';
+  $('coolantHint').textContent = !snap.obd.fresh && snap.obd.coolant == null && snap.obd.oil == null ? 'connect an adapter in Setup' : snap.obd.oil != null && snap.obd.coolant == null ? 'oil temp' : snap.obd.intake != null ? `intake ${fmtTemp(snap.obd.intake)}` : 'engine temp';
   $('throttle').textContent = snap.obd.throttle != null ? `${Math.round(snap.obd.throttle)}%` : '—';
   $('throttleBar').style.width = `${snap.obd.throttle ?? 0}%`;
   $('alt').textContent = fmtAlt(snap.alt);

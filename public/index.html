@@ -12,6 +12,9 @@
   <title>RideLens</title>
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" crossorigin href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;800&display=swap" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -64,12 +67,12 @@
         </article>
 
         <div class="tiles">
-          <article class="tile"><span class="label">Coolant</span><span class="val" id="coolant">—</span><span class="hint" id="coolantHint">engine temp</span></article>
-          <article class="tile"><span class="label">Throttle</span><span class="val" id="throttle">—</span><span class="meter"><i id="throttleBar"></i></span></article>
-          <article class="tile"><span class="label">Altitude</span><span class="val" id="alt">—</span><span class="hint" id="climb">↑0 ↓0 m</span></article>
-          <article class="tile"><span class="label">Distance</span><span class="val" id="dist">0.0 km</span><span class="hint" id="elapsed">0:00</span></article>
-          <article class="tile"><span class="label">Road</span><span class="val" id="rough">—</span><span class="status-pill" id="comfort">—</span></article>
-          <article class="tile"><span class="label">Ride score</span><span class="val" id="score">—</span><span class="hint" id="scoreHint">smooth · brake · shift</span></article>
+          <article class="tile" data-tile="coolant"><span class="tile-top"><span class="label">Coolant</span><span class="src obd" id="src-coolant">OBD</span></span><span class="val" id="coolant">—</span><span class="hint" id="coolantHint">engine temp</span></article>
+          <article class="tile" data-tile="throttle"><span class="tile-top"><span class="label">Throttle</span><span class="src obd" id="src-throttle">OBD</span></span><span class="val" id="throttle">—</span><span class="meter"><i id="throttleBar"></i></span></article>
+          <article class="tile" data-tile="alt"><span class="tile-top"><span class="label">Altitude</span><span class="src " id="src-alt">Phone</span></span><span class="val" id="alt">—</span><span class="hint" id="climb">↑0 ↓0 m</span></article>
+          <article class="tile" data-tile="dist"><span class="tile-top"><span class="label">Distance</span><span class="src " id="src-dist">Phone</span></span><span class="val" id="dist">0.0 km</span><span class="hint" id="elapsed">0:00</span></article>
+          <article class="tile" data-tile="rough"><span class="tile-top"><span class="label">Road</span><span class="src " id="src-rough">Phone</span></span><span class="val" id="rough">—</span><span class="status-pill" id="comfort">—</span></article>
+          <article class="tile" data-tile="score"><span class="tile-top"><span class="label">Ride score</span><span class="src fused" id="src-score">Fused</span></span><span class="val" id="score">—</span><span class="hint" id="scoreHint">smooth · brake · shift</span></article>
         </div>
 
         <article class="card wide">
