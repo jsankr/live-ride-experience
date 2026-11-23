@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createAnalyzer, G, comfortClass, haversine } from '../public/js/analytics.js';
+import { createAnalyzer, G, comfortClass, comfortLegend, COMFORT, haversine } from '../public/js/analytics.js';
 import { createSimulator } from './simulator.js';
 
 function runSim({ seconds = 900, seed = 7, obd = true, flip = false } = {}) {
@@ -112,4 +112,18 @@ test('ignores Safari-style invalid GPS values and position jumps', () => {
   a.pushGps(t0 + 2000, { lat: 12.98, lon: 77.59005, alt: 900, speed: null, heading: null, accuracy: 5 }); // 1.1 km jump
   assert.ok(a.snapshot().speedKmh < 25, `jump rejected: ${a.snapshot().speedKmh}`);
   assert.ok(a.snapshot().distanceKm < 0.05, 'jump not added to distance');
+});
+
+test('comfort colours: only Comfortable is green, and the legend covers every band', () => {
+  assert.equal(comfortClass(0.2).status, 'good');
+  assert.equal(comfortClass(0.5).label, 'A little uncomfortable');
+  assert.notEqual(comfortClass(0.5).status, 'good');
+  const statuses = COMFORT.map((c) => c[2]);
+  for (let i = 1; i < statuses.length; i++) {
+    const rank = (st) => ['good', 'warning', 'serious', 'critical'].indexOf(st);
+    assert.ok(rank(statuses[i]) >= rank(statuses[i - 1]), 'severity never decreases');
+  }
+  const legend = comfortLegend();
+  assert.deepEqual(legend.map((r) => r[0]), ['good', 'warning', 'serious', 'critical']);
+  for (const [, label] of COMFORT) assert.ok(legend.some((r) => r[1].toLowerCase().includes(label.toLowerCase())), `legend mentions ${label}`);
 });
