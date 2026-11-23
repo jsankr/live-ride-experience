@@ -100,6 +100,12 @@ export function Shell() {
           <button className="capture" id="captureBtn" disabled>Capture wrong-side vehicle</button>
           <p className="fine">Shortcut: a Bluetooth remote or keyboard sending <kbd>Enter</kbd>/<kbd>Space</kbd> triggers capture. Keep your eyes on the road: capture is one tap, and you can add details after you stop.</p>
         </article>
+        <article className="card" aria-label="Air quality">
+          <div className="card-head"><h3>Local air quality</h3><button className="ghost" id="airToggle" aria-pressed="false">Track air quality</button></div>
+          <p className="fine" id="airStatus" role="status">Hourly estimate. Tracking shares approximate coordinates.</p>
+          <div className="ws-stats" id="airStats" hidden></div>
+          <a className="fine" href="https://open-meteo.com/en/docs/air-quality-api" target="_blank" rel="noreferrer">Open-Meteo and CAMS</a>
+        </article>
         <article className="card">
           <div className="card-head"><h3>Reports</h3>
             <span className="actions"><button className="ghost" id="wsCsv">CSV</button><button className="ghost" id="wsJson">JSON</button><button className="ghost" id="wsSync">Sync</button></span>

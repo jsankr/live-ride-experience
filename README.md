@@ -92,10 +92,13 @@ What is verified, and what isn't:
 - **Adapters**: TuneECU documents that Triumph *reprogramming* over Bluetooth requires specific adapters (OBDLink LX/MX/MX+) ([TuneECU PDF](https://tuneecu.net/TuneECU_Android/Basics_Android_Version.pdf)). RideLens only *reads* data, but those OBDLink units are Classic Bluetooth. For this app, pick a **BLE** adapter (e.g. OBDLink CX).
 
 ## Wrong-side reporter
-- A 4-second rolling pre-roll of frames is kept, so one tap saves the moment *before* you reacted, plus a sharp frame and 3 follow-ups.
-- Plate entry is checked against Indian formats (`KA01AB1234`, `DL3C1234`, BH series). Optional OCR (Tesseract.js, loaded on demand) suggests the plate. **Expect to type it yourself most of the time.**
+
+Open **Wrong-side → Track air quality** to view local US AQI, PM₂.₅, PM₁₀, nitrogen dioxide, and ozone. Readings are hourly Open-Meteo/CAMS estimates based on rounded coordinates and refresh as you ride. A recent reading for the capture area is included in the evidence report.
+
+Start the rear camera before riding and use **Capture wrong-side vehicle**, the camera shortcut, or a Bluetooth remote to save a burst. RideLens saves the original frames around the trigger, selects a sharp preview, and records the timestamp and available GPS fix and accuracy. On-device analysis suggests a vehicle category, highlights a frame with a possible rider, and attempts to read Indian registration plates. Open the saved report to compare the suggested frames and confirm the vehicle and plate. Models download on first use. Camera quality, distance, lighting, and motion affect which details are readable. Capture and local storage work when analysis is unavailable. JSON export includes the full photo burst and analysis metadata.
+
+- Capture retains up to four seconds of pre-roll, the trigger frame, and three follow-ups. Plate entry checks common Indian formats, including `KA01AB1234`, `DL3C1234`, and Bharat Series. You can also run OCR on a frame manually.
 - Reports are stored locally in IndexedDB. They are synced to the server's SQLite DB (`/api/reports`, `/api/plates` for repeat offenders) only when you choose. Export to CSV/JSON, or use **Share to authorities** (Web Share with photo + maps link).
-- Trigger with a Bluetooth remote that sends Enter/Space, so you don't have to touch the screen.
 
 **Privacy & legal**: this stores images of people and number plates. Share them only with traffic police or official grievance channels, never publicly. Set `API_TOKEN` on the server, and check your local data-protection law (in India, the DPDP Act 2023) before running a shared database.
 

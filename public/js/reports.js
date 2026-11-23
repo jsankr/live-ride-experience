@@ -38,43 +38,67 @@ export class EvidenceCamera {
     this.video.srcObject = this.stream;
     await this.video.play();
     this.canvas = document.createElement('canvas');
-    this.timer = setInterval(() => this.grab().then((b) => {
-      if (!b) return;
-      this.ring.push({ t: Date.now(), blob: b });
-      while (this.ring.length > 8) this.ring.shift(); // ~4 s pre-roll at 2 fps
-    }), 500);
+    this.detail = document.createElement('canvas');
+    this.detail.width = 96; this.detail.height = 54;
+    const stream = this.stream;
+    this.timer = setInterval(async () => {
+      const frame = await this.grab();
+      if (!frame || this.stream !== stream) return;
+      this.ring.push(frame);
+      while (this.ring.length > 8) this.ring.shift();
+    }, 500);
   }
 
-  grab(quality = 0.72) {
+  grab(quality = 0.78) {
     const v = this.video;
-    if (!v.videoWidth) return Promise.resolve(null);
-    this.canvas.width = v.videoWidth; this.canvas.height = v.videoHeight;
-    this.canvas.getContext('2d').drawImage(v, 0, 0);
-    return new Promise((r) => this.canvas.toBlob(r, 'image/jpeg', quality));
+    if (!this.stream || !v.videoWidth) return Promise.resolve(null);
+    const t = Date.now();
+    const size = Math.min(1, 1920 / v.videoWidth, 1920 / v.videoHeight);
+    const width = Math.round(v.videoWidth * size);
+    const height = Math.round(v.videoHeight * size);
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas.width = width; this.canvas.height = height;
+    }
+    this.canvas.getContext('2d').drawImage(v, 0, 0, width, height);
+    const detail = this.detail.getContext('2d', { willReadFrequently: true });
+    detail.drawImage(v, v.videoWidth * 0.15, v.videoHeight * 0.15, v.videoWidth * 0.7, v.videoHeight * 0.7, 0, 0, 96, 54);
+    const { data } = detail.getImageData(0, 0, 96, 54);
+    let sharpness = 0;
+    for (let y = 1; y < 54; y++) for (let x = 1; x < 96; x++) {
+      const i = (y * 96 + x) * 4 + 1;
+      sharpness += (data[i] - data[i - 4]) ** 2 + (data[i] - data[i - 384]) ** 2;
+    }
+    return new Promise((resolve) => this.canvas.toBlob((blob) => resolve(blob ? { blob, t, sharpness } : null), 'image/jpeg', quality));
   }
 
-  // pre-roll + the sharpest-possible current frame + 3 post frames
   async burst() {
-    const pre = this.ring.slice(-6);
-    const now = await this.grab(0.9);
-    const post = [];
-    for (let i = 0; i < 3; i++) { await new Promise((r) => setTimeout(r, 400)); const b = await this.grab(0.85); if (b) post.push({ t: Date.now(), blob: b }); }
-    return [...pre, ...(now ? [{ t: Date.now(), blob: now, key: true }] : []), ...post];
+    const frames = this.ring.filter((frame) => Date.now() - frame.t <= 4250);
+    const now = await this.grab(0.92);
+    if (now) frames.push(now);
+    for (let i = 0; i < 3; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const frame = await this.grab(0.88);
+      if (frame) frames.push(frame);
+    }
+    const best = frames.reduce((sharpest, frame) => !sharpest || frame.sharpness >= sharpest.sharpness ? frame : sharpest, null);
+    return frames.map((frame) => ({ ...frame, key: frame === best }));
   }
 
   stop() {
     clearInterval(this.timer);
     this.stream?.getTracks().forEach((t) => t.stop());
+    this.video.srcObject = null;
     this.stream = null; this.ring = [];
   }
 }
 
-export async function saveReport({ frames, snapshot, rideId }) {
+export async function saveReport({ frames, snapshot, rideId, capturedAt = Date.now(), airQuality = null }) {
   const fix = snapshot?.fix;
   const report = {
-    id: uid(), t: Date.now(), rideId: rideId || null,
+    id: uid(), t: capturedAt, rideId: rideId || null,
     lat: fix?.lat ?? null, lon: fix?.lon ?? null, accuracy: fix?.accuracy ?? null,
-    heading: fix?.heading ?? null, mySpeedKmh: snapshot ? Math.round(snapshot.speedKmh) : null,
+    gpsTime: fix?.t ?? null, airQuality, analysis: { status: 'pending' },
+    heading: fix?.heading ?? null, mySpeedKmh: Number.isFinite(snapshot?.speedKmh) ? Math.round(snapshot.speedKmh) : null,
     photos: frames.map((f) => ({ t: f.t, blob: f.blob, key: !!f.key })),
     keyPhoto: Math.max(0, frames.findIndex((f) => f.key)),
     vehicleType: '', plate: '', plateValid: false, color: '', notes: '',
@@ -84,31 +108,44 @@ export async function saveReport({ frames, snapshot, rideId }) {
   return report;
 }
 
-let tesseractWorker;
-export async function ocrPlate(blob, onProgress) {
-  if (!window.Tesseract) {
-    await new Promise((res, rej) => {
-      const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
-      s.onload = res; s.onerror = () => rej(new Error('Could not load OCR engine (offline?)'));
-      document.head.appendChild(s);
-    });
-  }
-  if (!tesseractWorker) {
-    tesseractWorker = await window.Tesseract.createWorker('eng', 1, { logger: (m) => onProgress?.(m) });
-    await tesseractWorker.setParameters({ tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ' });
-  }
-  const { data } = await tesseractWorker.recognize(blob);
-  return { text: data.text, plates: findPlates(data.text), confidence: data.confidence };
+let tesseractWorker, ocrProgress;
+let ocrQueue = Promise.resolve();
+export function ocrPlate(blob, onProgress) {
+  const job = ocrQueue.then(async () => {
+    ocrProgress = onProgress;
+    try {
+      if (!window.Tesseract) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          const fail = () => { clearTimeout(timer); script.remove(); reject(new Error('Could not load OCR engine')); };
+          const timer = setTimeout(fail, 12000);
+          script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+          script.onload = () => { clearTimeout(timer); resolve(); };
+          script.onerror = fail;
+          document.head.append(script);
+        });
+      }
+      if (!tesseractWorker) {
+        const worker = await window.Tesseract.createWorker('eng', 1, { logger: (message) => ocrProgress?.(message) });
+        await worker.setParameters({ tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ' });
+        tesseractWorker = worker;
+      }
+      const { data } = await tesseractWorker.recognize(blob);
+      return { text: data.text, plates: findPlates(data.text), confidence: data.confidence };
+    } finally { ocrProgress = null; }
+  });
+  ocrQueue = job.catch(() => {});
+  return job;
 }
 
 const blobToDataUrl = (b) => new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(b); });
 
 export async function reportToJson(r, { photos = 'key' } = {}) {
-  const pick = photos === 'all' ? r.photos : r.photos.filter((_, i) => i === r.keyPhoto);
+  const pick = r.photos.map((photo, index) => ({ ...photo, key: index === r.keyPhoto, index }))
+    .filter((photo) => photos === 'all' || photo.key);
   return {
     ...r,
-    photos: await Promise.all(pick.map(async (p) => ({ t: p.t, key: p.key, dataUrl: await blobToDataUrl(p.blob) }))),
+    photos: await Promise.all(pick.map(async (p) => ({ t: p.t, key: p.key, index: p.index, dataUrl: await blobToDataUrl(p.blob) }))),
   };
 }
 
@@ -127,6 +164,6 @@ export async function syncReport(r, { serverUrl, token }) {
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`Server said ${res.status}: ${await res.text()}`);
-  r.synced = true; await db.put('reports', r);
+  await db.updateReport(r.id, (current) => current.analysis?.status === r.analysis?.status ? { ...current, synced: true } : current);
   return res.json();
 }

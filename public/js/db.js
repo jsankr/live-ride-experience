@@ -35,6 +35,20 @@ export const db = {
   get: (store, key) => tx(store, 'readonly', (s) => s.get(key)),
   del: (store, key) => tx(store, 'readwrite', (s) => s.delete(key)),
   all: async (store) => (await tx(store, 'readonly', (s) => s.getAll())) || [],
+  async updateReport(key, update) {
+    const database = await open();
+    return new Promise((resolve, reject) => {
+      const transaction = database.transaction('reports', 'readwrite');
+      const store = transaction.objectStore('reports');
+      const get = store.get(key);
+      let saved;
+      get.onsuccess = () => {
+        if (get.result) { saved = update(get.result); store.put(saved); }
+      };
+      transaction.oncomplete = () => resolve(saved);
+      transaction.onabort = () => reject(transaction.error);
+    });
+  },
   setKv: (key, value) => tx('kv', 'readwrite', (s) => s.put(value, key)),
   getKv: (key) => tx('kv', 'readonly', (s) => s.get(key)),
 };

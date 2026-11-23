@@ -148,6 +148,61 @@ try {
   await page.locator('#historyList .item').first().waitFor();
   assert.deepEqual(errors, []);
 
+  const evidence = await browser.newContext({
+    viewport: { width: 390, height: 844 }, geolocation: { latitude: 12.9716, longitude: 77.5946 },
+    permissions: ['camera', 'geolocation'], serviceWorkers: 'block', acceptDownloads: true,
+  });
+  await evidence.route('https://air-quality-api.open-meteo.com/**', (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    assert.equal(params.get('latitude'), '12.97');
+    return route.fulfill({ json: { current: {
+      time: new Date().toISOString().slice(0, 16), us_aqi: 77, pm2_5: 20, pm10: 31, nitrogen_dioxide: 9, ozone: 62,
+    } } });
+  });
+  await evidence.addInitScript(() => {
+    window.tf = {};
+    window.cocoSsd = { load: async () => ({ detect: async () => [
+      { class: 'motorcycle', score: 0.93, bbox: [100, 180, 240, 160] },
+      { class: 'person', score: 0.88, bbox: [160, 90, 70, 132] },
+    ] }) };
+    window.Tesseract = { createWorker: async () => ({
+      setParameters: async () => {},
+      recognize: async () => ({ data: { text: 'KA 01 AB 1234', confidence: 95 } }),
+    }) };
+  });
+  const evidencePage = await evidence.newPage();
+  evidencePage.on('pageerror', (error) => errors.push(error.message));
+  await evidencePage.goto(base);
+  await evidencePage.getByRole('button', { name: 'Wrong-side', exact: true }).click();
+  await evidencePage.getByRole('button', { name: 'Track air quality' }).click();
+  await evidencePage.getByText('Moderate · Estimate', { exact: false }).waitFor();
+  await evidencePage.getByRole('button', { name: 'Start camera' }).click();
+  await evidencePage.getByRole('button', { name: 'Capture wrong-side vehicle' }).click();
+  await evidencePage.waitForFunction(async () => {
+    const { db } = await import('/js/db.js');
+    return (await db.all('reports')).some((report) => report.analysis?.status === 'complete');
+  });
+  await evidencePage.locator('#wsList .item').first().click();
+  await evidencePage.getByText('Air at capture · US AQI 77', { exact: false }).waitFor();
+  await evidencePage.getByRole('button', { name: 'Use Two-wheeler' }).click();
+  await evidencePage.getByRole('button', { name: 'Use KA01AB1234' }).click();
+  await evidencePage.getByRole('button', { name: 'Save', exact: true }).click();
+  const report = await evidencePage.evaluate(async () => {
+    const { db } = await import('/js/db.js');
+    const [saved] = await db.all('reports');
+    return { ...saved, photos: saved.photos.map(({ blob }) => blob.size) };
+  });
+  assert.equal(report.plate, 'KA01AB1234');
+  assert.equal(report.vehicleType, 'Two-wheeler');
+  assert.equal(report.analysis.vehicle.rider, true);
+  assert.equal(report.lat, 12.9716);
+  assert.ok(report.gpsTime);
+  assert.ok(report.photos.length >= 4 && report.photos.every((size) => size > 0));
+  await evidencePage.getByRole('button', { name: 'Stop tracking' }).click();
+  assert.equal(await evidencePage.locator('#airStats').isHidden(), true);
+  await evidencePage.getByRole('button', { name: 'Stop camera' }).click();
+  assert.deepEqual(errors, []);
+
   const offline = await browser.newContext();
   await offline.route('https://**/*', (route) => route.abort());
   const offlinePage = await offline.newPage();
@@ -159,7 +214,7 @@ try {
   await offlinePage.getByRole('heading', { name: 'Ride dashboard' }).waitFor();
   await offlinePage.getByRole('navigation', { name: 'RideLens' }).getByRole('button', { name: 'Setup' }).click();
   await offlinePage.getByRole('heading', { name: 'OBD-II adapter' }).waitFor();
-  console.log('Cockpit browser checks passed, including seven viewports and offline reload.');
+  console.log('Cockpit browser checks passed, including seven viewports, air quality, evidence capture and offline reload.');
 } finally {
   await browser?.close();
   if (server.exitCode == null && !server.killed) { server.kill(); await once(server, 'exit'); }

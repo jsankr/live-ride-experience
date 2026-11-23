@@ -44,10 +44,14 @@ db.exec(`
   );
 `);
 
-const upsertReport = db.prepare(`INSERT INTO reports (id,t,lat,lon,accuracy,heading,my_speed_kmh,violation,vehicle_type,plate,plate_valid,color,notes,status,ride_id,received_at)
-  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+if (!db.prepare('PRAGMA table_info(reports)').all().some(({ name }) => name === 'evidence_json')) {
+  db.exec('ALTER TABLE reports ADD COLUMN evidence_json TEXT');
+}
+
+const upsertReport = db.prepare(`INSERT INTO reports (id,t,lat,lon,accuracy,heading,my_speed_kmh,violation,vehicle_type,plate,plate_valid,color,notes,status,ride_id,received_at,evidence_json)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   ON CONFLICT(id) DO UPDATE SET vehicle_type=excluded.vehicle_type, plate=excluded.plate, plate_valid=excluded.plate_valid,
-    color=excluded.color, notes=excluded.notes, status=excluded.status`);
+    color=excluded.color, notes=excluded.notes, status=excluded.status, evidence_json=COALESCE(excluded.evidence_json, reports.evidence_json)`);
 const insPhoto = db.prepare('INSERT INTO report_photos (report_id,t,is_key,file) VALUES (?,?,?,?)');
 const photosOf = db.prepare('SELECT t, is_key, file FROM report_photos WHERE report_id = ? ORDER BY t');
 
@@ -60,9 +64,12 @@ export function storeReport(r) {
   if (!Number.isFinite(+r.t)) throw httpError(400, 'invalid t');
   const plate = str(r.plate, 16)?.toUpperCase().replace(/[^A-Z0-9]/g, '') || null;
   const existing = db.prepare('SELECT 1 FROM reports WHERE id = ?').get(r.id);
+  const evidence = r.analysis || r.airQuality || r.gpsTime != null
+    ? JSON.stringify({ analysis: r.analysis, airQuality: r.airQuality, gpsTime: r.gpsTime, keyPhoto: r.keyPhoto }) : null;
+  if (evidence && evidence.length > 8192) throw httpError(400, 'invalid evidence metadata');
   upsertReport.run(r.id, +r.t, num(r.lat), num(r.lon), num(r.accuracy), num(r.heading), num(r.mySpeedKmh),
     str(r.violation, 40) || 'wrong-side', str(r.vehicleType, 40), plate, r.plateValid ? 1 : 0,
-    str(r.color, 40), str(r.notes, 2000), str(r.status, 40) || 'new', str(r.rideId, 64), Date.now());
+    str(r.color, 40), str(r.notes, 2000), str(r.status, 40) || 'new', str(r.rideId, 64), Date.now(), evidence);
   if (!existing && Array.isArray(r.photos)) {
     r.photos.slice(0, 20).forEach((p, i) => {
       const m = /^data:image\/jpeg;base64,([A-Za-z0-9+/=]+)$/.exec(p?.dataUrl || '');
@@ -72,11 +79,17 @@ export function storeReport(r) {
       insPhoto.run(r.id, num(p.t), p.key ? 1 : 0, file);
     });
   }
+  if (existing && Number.isInteger(r.keyPhoto) && r.keyPhoto >= 0 && r.keyPhoto < 20) {
+    const file = `${r.id}-${r.keyPhoto}.jpg`;
+    db.prepare('UPDATE report_photos SET is_key = (file = ?) WHERE report_id = ? AND EXISTS (SELECT 1 FROM report_photos WHERE report_id = ? AND file = ?)')
+      .run(file, r.id, r.id, file);
+  }
   return { id: r.id, created: !existing };
 }
 
 function rowToReport(row) {
-  return { ...row, plate_valid: !!row.plate_valid, photos: photosOf.all(row.id).map((p) => ({ ...p, url: `/photos/${p.file}` })) };
+  const { evidence_json: evidence, ...report } = row;
+  return { ...report, ...(evidence ? JSON.parse(evidence) : {}), plate_valid: !!row.plate_valid, photos: photosOf.all(row.id).map((p) => ({ ...p, url: `/photos/${p.file}` })) };
 }
 
 // ---------------- http ----------------

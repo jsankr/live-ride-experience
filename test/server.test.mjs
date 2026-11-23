@@ -47,6 +47,20 @@ test('stores reports with photos and aggregates repeat plates', async () => {
   assert.equal(bad.status, 400);
 });
 
+test('keeps evidence analysis and an air-quality estimate on synced reports', async () => {
+  const record = {
+    id: 'evidence-test-0001', t: 1700000000000, gpsTime: 1699999999900,
+    keyPhoto: 0, airQuality: { us_aqi: 77, pm2_5: 21 },
+    analysis: { status: 'complete', vehicle: { type: 'Two-wheeler', frame: 0 } },
+  };
+  const response = await fetch(base + '/api/reports', { method: 'POST', headers: auth, body: JSON.stringify(record) });
+  assert.equal(response.status, 201);
+  const saved = await (await fetch(base + '/api/reports/' + record.id, { headers: auth })).json();
+  assert.deepEqual(saved.airQuality, record.airQuality);
+  assert.deepEqual(saved.analysis, record.analysis);
+  assert.equal(saved.gpsTime, record.gpsTime);
+});
+
 test('bridges WebSocket to a Wi-Fi ELM327 over TCP', async () => {
   const elm = net.createServer((s) => s.on('data', (d) => s.write(d.toString().trim() === '010C' ? '41 0C 1A F8\r\r>' : 'OK\r\r>')));
   await new Promise((r) => elm.listen(0, '127.0.0.1', r));

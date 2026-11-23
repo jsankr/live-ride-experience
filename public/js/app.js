@@ -1,3 +1,6 @@
+import { airCell } from './air-quality.js';
+import { setupEvidenceLocation } from './evidence-location.js';
+import { analyzeEvidence, loadDetector } from './evidence-analysis.js';
 import { createAnalyzer, comfortClass, comfortLegend } from './analytics.js';
 import { Elm327, bleTransport, wsTransport } from './obd.js';
 import { requestMotionPermission, startMotion, startGps, keepAwake } from './sensors.js';
@@ -584,14 +587,22 @@ $('importFile').addEventListener('change', async (e) => {
 
 // ---------------- wrong-side reporting ----------------
 const camera = new EvidenceCamera($('camVideo'));
-let camOn = false, wsMap = null;
+let camOn = false, wsMap = null, cameraChanging = false;
+const evidenceLocation = setupEvidenceLocation(() => analyzer.snapshot().fix);
+let analysisQueue = Promise.resolve();
 async function setCamera(on) {
+  if (cameraChanging) return;
+  cameraChanging = true;
+  $('camToggle').disabled = true;
   try {
     if (on) { await camera.start(); } else camera.stop();
     camOn = on;
+    evidenceLocation.camera(on);
+    if (on) loadDetector().catch(() => {});
     $('camOff').hidden = on; $('captureBtn').disabled = !on;
     $('camToggle').textContent = on ? 'Stop camera' : 'Start camera';
-  } catch (e) { toast(`Camera: ${e.message}`, 4000); }
+  } catch (e) { camera.stop(); toast(`Camera: ${e.message}`, 4000); }
+  finally { cameraChanging = false; $('camToggle').disabled = false; }
 }
 $('camToggle').addEventListener('click', () => setCamera(!camOn));
 
@@ -599,20 +610,36 @@ async function capture() {
   const fab = $('fab');
   if (fab.classList.contains('busy')) return;
   fab.classList.add('busy');
+  const capturedAt = Date.now();
+  const snap = analyzer.snapshot();
+  const associatedRide = recording ? rideId : null;
+  const air = evidenceLocation.snapshot();
   try {
     if (!camOn) { await setCamera(true); await new Promise((r) => setTimeout(r, 700)); }
     if (!camOn) return;
     navigator.vibrate?.(60);
-    const frames = await camera.burst();
+    const [frames, fix] = await Promise.all([camera.burst(), evidenceLocation.fixAt(capturedAt)]);
     if (!frames.length) throw new Error('No frames captured');
-    const snap = analyzer.snapshot();
-    const rep = await saveReport({ frames, snapshot: snap.fix ? snap : null, rideId: recording ? rideId : null });
-    if (recording) {
-      const ev = { id: rep.id, type: 'wrongside', t: rep.t, lat: rep.lat, lon: rep.lon, speedKmh: snap.speedKmh, severity: 'severe' };
+    const airQuality = fix && air?.cell === airCell(fix) && Math.abs(air.time - capturedAt) <= 90 * 60000 ? air : null;
+    const speed = associatedRide && snap.speedSrc !== 'none' ? snap.speedKmh : null;
+    const rep = await saveReport({ frames, snapshot: { fix, speedKmh: speed }, rideId: associatedRide, capturedAt, airQuality });
+    if (recording && rideId === associatedRide) {
+      const ev = { id: rep.id, type: 'wrongside', t: rep.t, lat: rep.lat, lon: rep.lon, speedKmh: speed, severity: 'severe' };
       analyzer.events.push(ev); onEvent(ev);
     }
-    toast(`Saved ${frames.length} photos · add plate details after the ride`);
-    if (document.querySelector('#view-wrongside.active')) renderReports();
+    toast(`Saved ${frames.length} photos · analysing vehicle and plate`);
+    if (currentView === 'wrongside') renderReports();
+    analysisQueue = analysisQueue.then(async () => {
+      let timer;
+      const partial = { status: 'partial', vehicle: null, plate: null };
+      const analysis = await Promise.race([
+        analyzeEvidence(rep.photos).catch(() => partial),
+        new Promise((resolve) => { timer = setTimeout(() => resolve(partial), 45000); }),
+      ]).finally(() => clearTimeout(timer));
+      await db.updateReport(rep.id, (current) => ({ ...current, analysis, synced: false }));
+      if (currentView === 'wrongside') renderReports();
+    }).catch(() => {});
+
   } catch (e) { toast(e.message, 4000); } finally { fab.classList.remove('busy'); }
 }
 $('fab').addEventListener('click', capture);
@@ -649,6 +676,10 @@ async function renderReports() {
       <span class="muted">${esc(r.vehicleType || 'Vehicle')} · ${new Date(r.t).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · ${esc(r.status)}${r.synced ? ' · synced' : ''}</span></span>
       <span class="muted">${r.photos.length} 📷</span>
     </div>`).join('') : '<p class="empty">No reports yet. Tap the red camera button when a vehicle comes at you on the wrong side.</p>';
+  $('wsList').onkeydown = (event) => {
+    const item = event.target.closest('.item');
+    if (item && ['Enter', ' '].includes(event.key)) { event.preventDefault(); item.click(); }
+  };
   $('wsList').onclick = async (e) => { const it = e.target.closest('.item'); if (it) openReport(await db.get('reports', it.dataset.id)); };
   if (!wsMap) wsMap = makeMap('wsMap');
   if (wsMap) {
@@ -662,6 +693,9 @@ async function renderReports() {
 }
 
 function openReport(r) {
+  if (!r) return;
+  const { vehicle, plate } = r.analysis ?? {};
+  const air = r.airQuality;
   const dlg = $('reportDialog');
   let sel = r.keyPhoto || 0;
   const urls = r.photos.map((p) => URL.createObjectURL(p.blob));
@@ -669,8 +703,13 @@ function openReport(r) {
   dlg.innerHTML = `<div class="sheet-body">
     <div class="card-head"><h3>Wrong-side report</h3><button class="ghost" data-a="close">Close</button></div>
     <img class="main-photo" id="rpMain" src="${urls[sel]}" alt="Evidence photo">
+    <p class="fine"><a id="rpPhotoLink" href="${urls[sel]}" target="_blank" rel="noopener">Open full-resolution photo</a></p>
     <div class="strip-photos">${urls.map((u, i) => `<img src="${u}" data-i="${i}" class="${i === sel ? 'sel' : ''}" alt="frame ${i + 1}">`).join('')}</div>
     <p class="fine">${new Date(r.t).toLocaleString()} · ${r.lat != null ? `<a href="https://maps.google.com/?q=${r.lat},${r.lon}" target="_blank" rel="noopener">${r.lat.toFixed(5)}, ${r.lon.toFixed(5)}</a> (±${Math.round(r.accuracy || 0)} m)` : 'no GPS fix'}${r.mySpeedKmh != null ? ` · you at ${fmtSpeed(r.mySpeedKmh)} ${speedUnit()}` : ''}</p>
+    ${air ? `<p class="fine">Air at capture · US AQI ${esc(air.us_aqi ?? '—')} · PM₂.₅ ${esc(air.pm2_5 ?? '—')} µg/m³ · Open-Meteo estimate</p>` : ''}
+    ${r.analysis ? `<p class="fine">${r.analysis.status === 'pending' ? 'Analysis pending. Reopen to check results.' : r.analysis.status === 'partial' ? 'Some analysis was unavailable. Review the saved photos.' : 'Review automatic suggestions against the photos.'}</p>` : ''}
+    ${vehicle ? `<div class="row"><button class="ghost" data-a="vehicle">Use ${esc(vehicle.type)}</button><button class="ghost" data-a="vehicle-frame">Vehicle frame ${vehicle.frame + 1}${vehicle.rider ? ' · possible rider' : ''}</button></div>` : ''}
+    ${plate ? `<div class="row"><button class="ghost" data-a="plate">Use ${esc(plate.value)}</button><button class="ghost" data-a="plate-frame">Plate frame ${plate.frame + 1}</button></div>` : ''}
     <label>Registration number
       <div class="row" style="margin:0"><input id="rpPlate" value="${esc(r.plate)}" placeholder="KA 01 AB 1234" style="flex:1;text-transform:uppercase"><button class="ghost" data-a="ocr">Read plate</button></div>
       <span id="rpPlateMsg" class="muted"></span>
@@ -687,27 +726,41 @@ function openReport(r) {
   const plateMsg = () => { const n = normalizePlate($('rpPlate').value); $('rpPlateMsg').textContent = n.plate ? (n.valid ? `✓ ${n.plate} looks like a valid Indian registration` : `⚠ ${n.plate} doesn't match a standard format. Saved anyway.`) : ''; };
   plateMsg();
   $('rpPlate').addEventListener('input', plateMsg);
-  const collect = () => {
+  const collect = async () => {
     const n = normalizePlate($('rpPlate').value);
-    Object.assign(r, { plate: n.plate, plateValid: n.valid, vehicleType: $('rpType').value, color: $('rpColor').value, status: $('rpStatus').value, notes: $('rpNotes').value, keyPhoto: sel });
+    const fields = { plate: n.plate, plateValid: n.valid, vehicleType: $('rpType').value, color: $('rpColor').value, status: $('rpStatus').value, notes: $('rpNotes').value, keyPhoto: sel, synced: false };
+    const saved = await db.updateReport(r.id, (current) => ({ ...current, ...fields }));
+    if (saved) Object.assign(r, saved);
   };
+  function selectFrame(index) {
+    if (!urls[index]) return;
+    sel = index; $('rpMain').src = urls[index]; $('rpPhotoLink').href = urls[index];
+    dlg.querySelectorAll('.strip-photos img').forEach((image) => image.classList.toggle('sel', +image.dataset.i === index));
+  }
   dlg.onclick = async (e) => {
     const img = e.target.closest('.strip-photos img');
-    if (img) { sel = +img.dataset.i; $('rpMain').src = urls[sel]; dlg.querySelectorAll('.strip-photos img').forEach((x) => x.classList.toggle('sel', x === img)); return; }
-    const a = e.target.dataset.a; if (!a) return;
+    if (img) { selectFrame(+img.dataset.i); return; }
+    const a = e.target.dataset.a;
+    if (a === 'vehicle') $('rpType').value = vehicle.type;
+    if (a === 'plate') { $('rpPlate').value = plate.value; plateMsg(); }
+    if (a === 'vehicle-frame') selectFrame(vehicle.frame);
+    if (a === 'plate-frame') selectFrame(plate.frame);
     if (a === 'close') dlg.close();
-    if (a === 'save') { collect(); r.synced = false; await db.put('reports', r); thumbUrls.delete(r.id); toast('Saved'); dlg.close(); renderReports(); }
+    if (a === 'save') { await collect(); thumbUrls.delete(r.id); toast('Saved'); dlg.close(); renderReports(); }
     if (a === 'del') { if (confirm('Delete this report and its photos?')) { await db.del('reports', r.id); dlg.close(); renderReports(); } }
     if (a === 'ocr') {
-      $('rpPlateMsg').textContent = 'Loading OCR engine…';
+      const progress = $('rpPlateMsg');
+      const input = $('rpPlate');
+      progress.textContent = 'Loading OCR engine…';
       try {
-        const res = await ocrPlate(r.photos[sel].blob, (m) => { if (m.status) $('rpPlateMsg').textContent = `${m.status} ${m.progress ? Math.round(m.progress * 100) + '%' : ''}`; });
-        if (res.plates.length) { $('rpPlate').value = res.plates[0]; plateMsg(); }
-        else $('rpPlateMsg').textContent = `No plate found (read: "${res.text.trim().slice(0, 40)}"). Try another frame or type it.`;
-      } catch (err) { $('rpPlateMsg').textContent = err.message; }
+        const res = await ocrPlate(r.photos[sel].blob, (m) => { if (m.status) progress.textContent = `${m.status} ${m.progress ? Math.round(m.progress * 100) + '%' : ''}`; });
+        if (!input.isConnected || !dlg.open) return;
+        if (res.plates.length) { input.value = res.plates[0]; plateMsg(); }
+        else progress.textContent = `No plate found (read: "${res.text.trim().slice(0, 40)}"). Try another frame or type it.`;
+      } catch (err) { progress.textContent = err.message; }
     }
     if (a === 'share') {
-      collect(); await db.put('reports', r);
+      await collect();
       const text = `Wrong-side driving report\nVehicle: ${r.vehicleType || 'unknown'} ${r.color || ''}\nRegistration: ${r.plate || 'not readable'}\nTime: ${new Date(r.t).toLocaleString()}\nLocation: ${r.lat != null ? `https://maps.google.com/?q=${r.lat},${r.lon}` : 'unknown'}\n${r.notes || ''}`;
       const file = new File([r.photos[sel].blob], `wrongside-${r.plate || r.id}.jpg`, { type: 'image/jpeg' });
       try {
@@ -716,7 +769,7 @@ function openReport(r) {
       } catch { /* cancelled */ }
     }
     if (a === 'sync') {
-      collect(); await db.put('reports', r);
+      await collect();
       if (!settings.serverUrl) { toast('Set a server URL in Setup first'); return; }
       try { await syncReport(r, settings); toast('Synced to server'); renderReports(); } catch (err) { toast(err.message, 4000); }
     }
@@ -727,7 +780,7 @@ function openReport(r) {
 
 $('wsCsv').addEventListener('click', async () => download('wrongside-reports.csv', reportsToCsv(await db.all('reports')), 'text/csv'));
 $('wsJson').addEventListener('click', async () => {
-  const all = await Promise.all((await db.all('reports')).map((r) => reportToJson(r)));
+  const all = await Promise.all((await db.all('reports')).map((r) => reportToJson(r, { photos: 'all' })));
   download('wrongside-reports.json', JSON.stringify(all, null, 1), 'application/json');
 });
 $('wsSync').addEventListener('click', async () => {
