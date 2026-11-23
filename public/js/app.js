@@ -1,4 +1,4 @@
-import { createAnalyzer, comfortClass } from './analytics.js';
+import { createAnalyzer, comfortClass, comfortLegend } from './analytics.js';
 import { Elm327, bleTransport, wsTransport } from './obd.js';
 import { requestMotionPermission, startMotion, startGps, keepAwake } from './sensors.js';
 import { StripChart, FrictionCircle, lineChart, barChart, histogram } from './charts.js';
@@ -449,7 +449,11 @@ function renderReport(ride) {
     const legend = L.control({ position: 'bottomleft' });
     legend.onAdd = () => {
       const d = L.DomUtil.create('div', 'card'); d.style.padding = '8px 10px'; d.style.fontSize = '12px';
-      d.innerHTML = '<b>Road comfort (ISO 2631)</b><br>' + [['good', 'Comfortable'], ['warning', 'Fairly uncomfortable'], ['serious', 'Uncomfortable'], ['critical', 'Very uncomfortable']].map(([k, l]) => `<span class="status-pill ${k}" style="margin-top:4px">${l}</span>`).join('<br>');
+      let lo = 0;
+      d.innerHTML = '<b>Road comfort (ISO 2631)</b><br>' + comfortLegend().map(([k, l, hi]) => {
+        const range = hi === Infinity ? `≥ ${lo}` : `${lo}–${hi}`; lo = hi;
+        return `<span class="status-pill ${k}" style="margin-top:4px" title="${range} m/s² RMS">${l}</span>`;
+      }).join('<br>');
       return d;
     };
     legend.addTo(reportMap);

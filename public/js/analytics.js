@@ -45,14 +45,28 @@ export const DEFAULTS = {
 
 // ISO 2631-1 Annex C comfort reactions (overall vibration, m/s^2 r.m.s.).
 // Our RMS is not frequency-weighted, so treat the label as indicative.
+// Six ISO bands share four status colours; only 'Comfortable' is green, so a
+// green pill or map segment always means the same thing. The map legend is
+// built from this table (comfortLegend) so the two cannot drift apart.
 export const COMFORT = [
   [0.315, 'Comfortable', 'good'],
-  [0.63, 'A little uncomfortable', 'good'],
-  [1.0, 'Fairly uncomfortable', 'warning'],
+  [0.63, 'A little uncomfortable', 'warning'],
+  [1.0, 'Fairly uncomfortable', 'serious'],
   [1.6, 'Uncomfortable', 'serious'],
   [2.5, 'Very uncomfortable', 'critical'],
   [Infinity, 'Extremely uncomfortable', 'critical'],
 ];
+
+// One legend row per colour: [status, label, upper limit in m/s^2 or Infinity]
+export function comfortLegend() {
+  const rows = [];
+  for (const [lim, label, status] of COMFORT) {
+    const last = rows[rows.length - 1];
+    if (last && last[0] === status) { last[1] = `${last[1].split(' / ')[0]} / ${label.toLowerCase()}`; last[2] = lim; }
+    else rows.push([status, label, lim]);
+  }
+  return rows;
+}
 
 export function comfortClass(rms) {
   for (const [lim, label, status] of COMFORT) if (rms < lim) return { label, status };
