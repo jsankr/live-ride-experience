@@ -22,7 +22,7 @@ Every tile is labelled with where its number comes from: **Phone** (GPS/IMU), **
 | <img src="docs/screenshots/live-phone-dark.png" alt="Live view, phone, dark" width="220"> | <img src="docs/screenshots/live-phone-light.png" alt="Live view, phone, light" width="220"> | <img src="docs/screenshots/live-phone-no-obd.png" alt="Live view, phone sensors only" width="220"> | <img src="docs/screenshots/live-phone-dark-full.png" alt="Live view, phone, full page" width="220"> |
 
 ### Ride report
-Heuristic score and summary stats, insights, a route map coloured by road comfort with every event pinned, then speed, braking, roughness, elevation, lean, rpm and clutch-time charts, event breakdown, learned gear ratios and the full event log. Exports to JSON, CSV and GPX.
+Heuristic score and summary stats, insights, a route map coloured by road comfort with events clustered into numbered bubbles (tap to zoom in), then speed, braking, roughness, elevation, lean, rpm and clutch-time charts. On long rides the charts plot the average with a band for the min–max range, and events appear as ticks under the time axis, event breakdown, learned gear ratios and the full event log. Exports to JSON, CSV and GPX.
 
 | Desktop | Phone |
 |---|---|

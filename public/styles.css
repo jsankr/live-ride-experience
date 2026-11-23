@@ -279,6 +279,16 @@ textarea { font: inherit; color: inherit; min-height: 64px; }
 .chart .marker.status-critical { stroke: var(--status-critical); }
 .chart .marker.status-serious { stroke: var(--status-serious); }
 .chart .marker.status-warning { stroke: var(--status-warning); }
+.chart .rug { stroke-width: 2; stroke-linecap: round; }
+.chart .rug.status-critical { stroke: var(--status-critical); }
+.chart .rug.status-serious { stroke: var(--status-serious); }
+.chart .rug.status-warning { stroke: var(--status-warning); }
+/* report map: clustered event pins */
+.ev-cluster { display: grid; place-items: center; border-radius: 50%; color: var(--on-status); font: 800 12px/1 var(--font-display); border: 2px solid #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, .35); }
+.ev-cluster.critical { color: var(--on-accent); }
+.ev-cluster.good { background: var(--status-good); } .ev-cluster.warning { background: var(--status-warning); }
+.ev-cluster.serious { background: var(--status-serious); } .ev-cluster.critical { background: var(--status-critical); }
+.ev-cluster.info { background: var(--accent-fill); color: var(--on-accent); }
 .chart-wrap { position: relative; }
 .tooltip { position: absolute; pointer-events: none; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font-size: 12px; display: grid; gap: 2px; box-shadow: 0 4px 14px rgba(0, 0, 0, .25); white-space: nowrap; z-index: 2; }
 .tooltip span { color: var(--text-secondary); }

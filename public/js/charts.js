@@ -117,35 +117,60 @@ function niceTicks(min, max, n = 4) {
   return out;
 }
 
+// Bin a time series into n equal-time buckets: [{t, mean, min, max, n}].
+// Pure (no DOM) so it is unit-tested. Empty buckets are dropped.
+export function downsample(pts, key, n, t0 = pts[0]?.t, t1 = pts[pts.length - 1]?.t) {
+  if (!pts.length || n < 1) return [];
+  const span = (t1 - t0) || 1, out = new Array(n);
+  for (const p of pts) {
+    const v = p[key]; if (v == null) continue;
+    const i = Math.min(n - 1, Math.max(0, Math.floor(((p.t - t0) / span) * n)));
+    const b = out[i] || (out[i] = { t: 0, sum: 0, min: Infinity, max: -Infinity, n: 0 });
+    b.t += p.t; b.sum += v; b.n++; if (v < b.min) b.min = v; if (v > b.max) b.max = v;
+  }
+  return out.filter(Boolean).map((b) => ({ t: b.t / b.n, mean: b.sum / b.n, min: b.min, max: b.max, n: b.n }));
+}
+
 // Single-series line/area chart over ride time with crosshair tooltip.
-// markers: [{t, label, status}]
-export function lineChart(container, { data, key, color = '--series-1', unit = '', area = false, height = 160, min, max, markers = [], fmt = (v) => v.toFixed(0), zero = false }) {
+// Long rides are binned to ~1 bucket per 3 px: the line is the bucket mean and a
+// soft band shows the min–max range, so peaks stay visible without a barcode.
+// markers: [{t, label, status}] are drawn as a tick strip under the plot.
+export function lineChart(container, { data, key, color = '--series-1', unit = '', area = false, height = 160, min, max, markers = [], fmt = (v) => v.toFixed(0), zero = false, band = true }) {
   container.innerHTML = '';
-  const pts = data.filter((d) => d[key] != null);
-  if (pts.length < 2) { container.innerHTML = '<p class="empty">Not enough data for this chart.</p>'; return; }
-  const W = container.clientWidth || 600, H = height, L = 40, R = 10, T = 10, B = 22;
+  const raw = data.filter((d) => d[key] != null);
+  if (raw.length < 2) { container.innerHTML = '<p class="empty">Not enough data for this chart.</p>'; return; }
+  const W = container.clientWidth || 600, rug = markers.length ? 10 : 0, H = height + rug, L = 40, R = 10, T = 10, B = 22 + rug;
   const t0 = data[0].t, t1 = data[data.length - 1].t;
-  const vals = pts.map((d) => d[key]);
-  let lo = min ?? Math.min(...vals), hi = max ?? Math.max(...vals);
+  const buckets = Math.max(20, Math.floor((W - L - R) / 3));
+  const binned = raw.length > buckets;
+  const pts = binned ? downsample(raw, key, buckets, t0, t1) : raw.map((p) => ({ t: p.t, mean: p[key], min: p[key], max: p[key], n: 1 }));
+  let lo = min ?? Math.min(...pts.map((p) => (band ? p.min : p.mean))), hi = max ?? Math.max(...pts.map((p) => (band ? p.max : p.mean)));
   if (zero) lo = Math.min(lo, 0);
   if (hi - lo < 1e-6) { hi += 1; lo -= 1; }
   const pad = (hi - lo) * 0.08; if (min == null) lo -= pad; if (max == null) hi += pad;
   const X = (t) => L + ((t - t0) / (t1 - t0 || 1)) * (W - L - R);
-  const Y = (v) => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+  const Yc = (v) => T + (1 - (Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo)) * (H - T - B);
   const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H, role: 'img', class: 'chart' }, container);
   for (const v of niceTicks(lo, hi)) {
-    el('line', { x1: L, x2: W - R, y1: Y(v), y2: Y(v), class: 'grid' }, svg);
-    el('text', { x: L - 6, y: Y(v) + 3, class: 'tick', 'text-anchor': 'end' }, svg).textContent = fmt(v);
+    el('line', { x1: L, x2: W - R, y1: Yc(v), y2: Yc(v), class: 'grid' }, svg);
+    el('text', { x: L - 6, y: Yc(v) + 3, class: 'tick', 'text-anchor': 'end' }, svg).textContent = fmt(v);
   }
   const span = t1 - t0, tickStep = [60e3, 120e3, 300e3, 600e3, 900e3, 1800e3].find((s) => span / s <= 6) || 3600e3;
   for (let t = 0; t <= span; t += tickStep) el('text', { x: X(t0 + t), y: H - 6, class: 'tick', 'text-anchor': 'middle' }, svg).textContent = fmtTime(t);
-  for (const m of markers) {
-    const x = X(m.t);
-    el('line', { x1: x, x2: x, y1: T, y2: H - B, class: `marker status-${m.status || 'warning'}` }, svg);
+  // event tick strip (rug) between plot and time axis
+  if (rug) {
+    const y = H - B + 4;
+    for (const m of markers) el('line', { x1: X(m.t), x2: X(m.t), y1: y, y2: y + rug - 2, class: `rug status-${m.status || 'warning'}` }, svg);
   }
-  const d = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.t).toFixed(1)},${Y(p[key]).toFixed(1)}`).join('');
-  if (area) el('path', { d: `${d}L${X(pts[pts.length - 1].t)},${Y(Math.max(lo, 0))}L${X(pts[0].t)},${Y(Math.max(lo, 0))}Z`, fill: `var(${color})`, opacity: 0.16 }, svg);
-  el('path', { d, fill: 'none', stroke: `var(${color})`, 'stroke-width': 2, 'stroke-linejoin': 'round' }, svg);
+  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.t).toFixed(1)},${Yc(p.mean).toFixed(1)}`).join('');
+  if (band && binned) {
+    const up = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.t).toFixed(1)},${Yc(p.max).toFixed(1)}`).join('');
+    const dn = pts.slice().reverse().map((p) => `L${X(p.t).toFixed(1)},${Yc(p.min).toFixed(1)}`).join('');
+    el('path', { d: `${up}${dn}Z`, fill: `var(${color})`, opacity: 0.22, class: 'range-band' }, svg);
+  } else if (area) {
+    el('path', { d: `${line}L${X(pts[pts.length - 1].t)},${Yc(Math.max(lo, 0))}L${X(pts[0].t)},${Yc(Math.max(lo, 0))}Z`, fill: `var(${color})`, opacity: 0.16 }, svg);
+  }
+  el('path', { d: line, fill: 'none', stroke: `var(${color})`, 'stroke-width': 2, 'stroke-linejoin': 'round' }, svg);
   // hover layer
   const cross = el('line', { y1: T, y2: H - B, class: 'crosshair', visibility: 'hidden' }, svg);
   const dot = el('circle', { r: 4, fill: `var(${color})`, stroke: 'var(--surface-1)', 'stroke-width': 2, visibility: 'hidden' }, svg);
@@ -156,13 +181,14 @@ export function lineChart(container, { data, key, color = '--series-1', unit = '
     const x = ((ev.clientX - r.left) / r.width) * W;
     const t = t0 + ((x - L) / (W - L - R)) * (t1 - t0);
     let best = pts[0]; for (const p of pts) if (Math.abs(p.t - t) < Math.abs(best.t - t)) best = p;
-    const px = X(best.t), py = Y(best[key]);
+    const px = X(best.t), py = Yc(best.mean);
     cross.setAttribute('x1', px); cross.setAttribute('x2', px); cross.setAttribute('visibility', 'visible');
     dot.setAttribute('cx', px); dot.setAttribute('cy', py); dot.setAttribute('visibility', 'visible');
     tip.hidden = false;
-    tip.innerHTML = `<b>${fmt(best[key])}${unit}</b><span>${fmtTime(best.t - t0)}</span>`;
+    const range = binned && best.max - best.min > 1e-9 ? `<span>range ${fmt(best.min)} … ${fmt(best.max)}${unit}</span>` : '';
+    tip.innerHTML = `<b>${binned ? 'avg ' : ''}${fmt(best.mean)}${unit}</b>${range}<span>${fmtTime(best.t - t0)}</span>`;
     const left = (px / W) * r.width;
-    tip.style.left = `${Math.min(r.width - 90, Math.max(0, left + 10))}px`; tip.style.top = `${(py / H) * r.height - 10}px`;
+    tip.style.left = `${Math.min(r.width - 130, Math.max(0, left + 10))}px`; tip.style.top = `${(py / H) * r.height - 10}px`;
   };
   hit.addEventListener('pointermove', move);
   hit.addEventListener('pointerdown', move);

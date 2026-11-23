@@ -127,3 +127,15 @@ test('comfort colours: only Comfortable is green, and the legend covers every ba
   assert.deepEqual(legend.map((r) => r[0]), ['good', 'warning', 'serious', 'critical']);
   for (const [, label] of COMFORT) assert.ok(legend.some((r) => r[1].toLowerCase().includes(label.toLowerCase())), `legend mentions ${label}`);
 });
+
+test('downsample keeps extremes and averages per bucket', async () => {
+  const { downsample } = await import('../public/js/charts.js');
+  const pts = Array.from({ length: 1000 }, (_, i) => ({ t: i * 100, v: i === 500 ? 9 : i % 2 ? 1 : -1 }));
+  const b = downsample(pts, 'v', 50);
+  assert.equal(b.length, 50);
+  assert.equal(b.reduce((a, x) => a + x.n, 0), 1000, 'every sample lands in one bucket');
+  assert.equal(Math.max(...b.map((x) => x.max)), 9, 'a one-sample spike survives binning');
+  assert.ok(Math.abs(b[0].mean) < 1e-9, 'mean of alternating ±1 is 0');
+  assert.deepEqual(downsample([], 'v', 10), []);
+  assert.equal(downsample([{ t: 0, v: null }, { t: 1, v: 2 }], 'v', 4).length, 1, 'null samples are skipped');
+});

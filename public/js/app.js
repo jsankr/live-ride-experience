@@ -364,6 +364,40 @@ window.addEventListener('resize', () => {
   resizeT = setTimeout(() => { if (currentRide && document.querySelector('#view-report.active')) renderReport(currentRide); }, 250);
 });
 
+// Report map pins: events closer than ~44 px on screen merge into one bubble
+// (count, coloured by its most severe event); tapping a bubble zooms into it.
+const SEVERITY = ['info', 'good', 'warning', 'serious', 'critical'];
+function clusterEvents(map, events) {
+  const layer = L.layerGroup().addTo(map);
+  const draw = () => {
+    layer.clearLayers();
+    const cells = new Map();
+    for (const e of events) {
+      const p = map.latLngToLayerPoint([e.lat, e.lon]);
+      const k = `${Math.floor(p.x / 44)}:${Math.floor(p.y / 44)}`;
+      (cells.get(k) || cells.set(k, []).get(k)).push(e);
+    }
+    for (const group of cells.values()) {
+      if (group.length === 1) {
+        const e = group[0], m = EV[e.type] || EV.bump;
+        L.circleMarker([e.lat, e.lon], { radius: 6, color: '#fff', weight: 2, fillColor: statusColor(m.status), fillOpacity: 1 })
+          .bindPopup(`<b>${m.title}</b><br>${esc(describe(e))}<br>${fmtClock(e.t)}`).addTo(layer);
+        continue;
+      }
+      const worst = group.reduce((w, e) => Math.max(w, SEVERITY.indexOf((EV[e.type] || EV.bump).status)), 0);
+      const lat = group.reduce((a, e) => a + e.lat, 0) / group.length, lon = group.reduce((a, e) => a + e.lon, 0) / group.length;
+      const size = Math.min(44, 24 + Math.round(Math.sqrt(group.length) * 4));
+      const counts = {}; for (const e of group) { const t = (EV[e.type] || EV.bump).title; counts[t] = (counts[t] || 0) + 1; }
+      L.marker([lat, lon], { icon: L.divIcon({ className: '', html: `<div class="ev-cluster ${SEVERITY[worst]}" style="width:${size}px;height:${size}px">${group.length}</div>`, iconSize: [size, size] }),
+        title: Object.entries(counts).map(([t, n]) => `${n} × ${t}`).join(', ') })
+        .on('click', () => map.fitBounds(L.latLngBounds(group.map((e) => [e.lat, e.lon])), { padding: [40, 40], maxZoom: 18 }))
+        .addTo(layer);
+    }
+  };
+  map.on('zoomend', draw);
+  draw();
+}
+
 function renderReport(ride) {
   const s = ride.summary;
   const [st, word] = SCORE_STATUS(s.scores.overall);
@@ -400,8 +434,8 @@ function renderReport(ride) {
       <article class="card wide"><h3>What was measured</h3><ul class="insights">${insights(ride).map((i) => `<li>${i}</li>`).join('')}</ul></article>
       <article class="card wide map-card"><div id="reportMap" class="map" style="min-height:360px"></div></article>
       <article class="card wide"><div class="card-head"><h3>Speed</h3><span class="muted">${speedUnit()}</span></div><div class="chart-wrap" id="cSpeed"></div></article>
-      <article class="card"><div class="card-head"><h3>Braking &amp; acceleration</h3><span class="muted">g · dashed = hard brake</span></div><div class="chart-wrap" id="cLong"></div></article>
-      <article class="card"><div class="card-head"><h3>Road roughness</h3><span class="muted">m/s² RMS · dashed = pothole</span></div><div class="chart-wrap" id="cRough"></div></article>
+      <article class="card"><div class="card-head"><h3>Braking &amp; acceleration</h3><span class="muted">g · band = range · ticks = hard brakes</span></div><div class="chart-wrap" id="cLong"></div></article>
+      <article class="card"><div class="card-head"><h3>Road roughness</h3><span class="muted">m/s² · band = range · ticks = potholes</span></div><div class="chart-wrap" id="cRough"></div></article>
       <article class="card"><div class="card-head"><h3>Elevation</h3><span class="muted">${imperial() ? 'ft' : 'm'}</span></div><div class="chart-wrap" id="cAlt"></div></article>
       <article class="card"><div class="card-head"><h3>Lean angle</h3><span class="muted">° · + right / − left</span></div><div class="chart-wrap" id="cLean"></div></article>
       <article class="card"><div class="card-head"><h3>Engine rpm</h3><span class="muted">OBD</span></div><div class="chart-wrap" id="cRpm"></div></article>
@@ -441,11 +475,7 @@ function renderReport(ride) {
       const a = ride.track[i - 1], b = ride.track[i];
       L.polyline([[a.lat, a.lon], [b.lat, b.lon]], { color: statusColor(comfortClass(b.rough).status), weight: 5, opacity: 0.9 }).addTo(reportMap);
     }
-    for (const e of ride.events) {
-      if (e.lat == null || e.type === 'shift') continue;
-      const m = EV[e.type] || EV.bump;
-      L.circleMarker([e.lat, e.lon], { radius: 6, color: '#fff', weight: 2, fillColor: statusColor(m.status), fillOpacity: 1 }).bindPopup(`<b>${m.title}</b><br>${esc(describe(e))}<br>${fmtClock(e.t)}`).addTo(reportMap);
-    }
+    clusterEvents(reportMap, ride.events.filter((e) => e.lat != null && e.type !== 'shift'));
     const legend = L.control({ position: 'bottomleft' });
     legend.onAdd = () => {
       const d = L.DomUtil.create('div', 'card'); d.style.padding = '8px 10px'; d.style.fontSize = '12px';
