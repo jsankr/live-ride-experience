@@ -25,8 +25,14 @@ jobs:
       - run: npm run build
       - run: git diff --exit-code -- public/js/cockpit.js public/js/cockpit.js.LEGAL.txt public/leaflet
       - run: npm test
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:browser
+      - name: Run Chromium browser checks
+        run: |
+          if command -v google-chrome >/dev/null; then
+            export CHROMIUM_PATH="$(command -v google-chrome)"
+          else
+            npx playwright install --with-deps chromium
+          fi
+          npm run test:browser
 
   deploy:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
