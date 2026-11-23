@@ -1,12 +1,12 @@
 import { airCategory, airCell } from './air-quality.js';
 import { setupEvidenceLocation } from './evidence-location.js';
-import { analyzeEvidence, loadDetector } from './evidence-analysis.js';
+import { analyzeEvidence, loadDetector, readPlateCrop } from './evidence-analysis.js';
 import { createAnalyzer, comfortClass, comfortLegend } from './analytics.js';
 import { Elm327, bleTransport, wsTransport } from './obd.js';
 import { requestMotionPermission, startMotion, startGps, keepAwake } from './sensors.js';
 import { StripChart, FrictionCircle, lineChart, barChart, histogram } from './charts.js';
 import { db, uid } from './db.js';
-import { EvidenceCamera, saveReport, ocrPlate, normalizePlate, reportToJson, reportsToCsv, syncReport } from './reports.js';
+import { EvidenceCamera, saveReport, normalizePlate, reportToJson, reportsToCsv, syncReport } from './reports.js';
 
 const $ = (id) => document.getElementById(id);
 const G = 9.80665;
@@ -590,6 +590,20 @@ const camera = new EvidenceCamera($('camVideo'));
 let camOn = false, wsMap = null, cameraChanging = false;
 const evidenceLocation = setupEvidenceLocation(() => analyzer.snapshot().fix);
 let analysisQueue = Promise.resolve();
+function saveAnalysis(id, analysis) {
+  return db.updateReport(id, (current) => {
+    const vehicle = analysis.vehicle;
+    const plate = analysis.plate;
+    return {
+      ...current, analysis,
+      vehicleType: current.vehicleType || (vehicle?.confidence >= 0.65 ? vehicle.type : ''),
+      color: current.color || (vehicle?.confidence >= 0.65 ? vehicle.color || '' : ''),
+      plate: current.plate || (plate?.confidence >= 75 ? plate.value : ''),
+      plateValid: current.plate ? current.plateValid : plate?.confidence >= 75,
+      synced: false,
+    };
+  });
+}
 async function setCamera(on) {
   if (cameraChanging) return;
   cameraChanging = true;
@@ -636,7 +650,7 @@ async function capture() {
         analyzeEvidence(rep.photos).catch(() => partial),
         new Promise((resolve) => { timer = setTimeout(() => resolve(partial), 45000); }),
       ]).finally(() => clearTimeout(timer));
-      await db.updateReport(rep.id, (current) => ({ ...current, analysis, synced: false }));
+      await saveAnalysis(rep.id, analysis);
       if (currentView === 'wrongside') renderReports();
     }).catch(() => {});
 
@@ -702,18 +716,26 @@ function openReport(r) {
   const vt = ['', 'Two-wheeler', 'Car', 'Auto-rickshaw', 'Bus', 'Truck / tempo', 'Tractor', 'Cycle', 'Other'];
   dlg.innerHTML = `<div class="sheet-body">
     <div class="card-head"><h3>Wrong-side report</h3><button class="ghost" data-a="close">Close</button></div>
-    <img class="main-photo" id="rpMain" src="${urls[sel]}" alt="Evidence photo">
+    <div class="evidence-crop" id="rpCrop">
+      <img class="main-photo" id="rpMain" src="${urls[sel]}" alt="Evidence photo">
+      <span id="rpBox" hidden aria-hidden="true"></span>
+    </div>
     <p class="fine"><a id="rpPhotoLink" href="${urls[sel]}" target="_blank" rel="noopener">Open full-resolution photo</a></p>
     <div class="strip-photos">${urls.map((u, i) => `<img src="${u}" data-i="${i}" class="${i === sel ? 'sel' : ''}" alt="frame ${i + 1}">`).join('')}</div>
     <p class="fine">${new Date(r.t).toLocaleString()} · ${r.lat != null ? `<a href="https://maps.google.com/?q=${r.lat},${r.lon}" target="_blank" rel="noopener">${r.lat.toFixed(5)}, ${r.lon.toFixed(5)}</a> (±${Math.round(r.accuracy || 0)} m)` : 'no GPS fix'}${r.mySpeedKmh != null ? ` · you at ${fmtSpeed(r.mySpeedKmh)} ${speedUnit()}` : ''}</p>
     ${air ? `<p class="fine" data-tone="${airCategory(air.india_aqi).tone}">Air at capture · ${air.us_aqi != null ? `US AQI ${esc(air.us_aqi)}` : `India AQI ${esc(air.india_aqi ?? '—')}`} · Open-Meteo estimate</p>` : ''}
     ${r.analysis ? `<p class="fine">${r.analysis.status === 'pending' ? 'Analysis pending. Reopen to check results.' : r.analysis.status === 'partial' ? 'Some analysis was unavailable. Review the saved photos.' : 'Review automatic suggestions against the photos.'}</p>` : ''}
-    ${vehicle ? `<div class="row"><button class="ghost" data-a="vehicle">Use ${esc(vehicle.type)}</button><button class="ghost" data-a="vehicle-frame">Vehicle frame ${vehicle.frame + 1}${vehicle.rider ? ' · possible rider' : ''}</button></div>` : ''}
+    ${vehicle ? `<div class="row"><button class="ghost" data-a="vehicle">Use ${esc(vehicle.type)}</button>${vehicle.color ? `<button class="ghost" data-a="color">Use ${esc(vehicle.color)}</button>` : ''}<button class="ghost" data-a="vehicle-frame">Vehicle frame ${vehicle.frame + 1}${vehicle.rider ? ' · possible rider' : ''}</button></div>` : ''}
     ${plate ? `<div class="row"><button class="ghost" data-a="plate">Use ${esc(plate.value)}</button><button class="ghost" data-a="plate-frame">Plate frame ${plate.frame + 1}</button></div>` : ''}
-    <label>Registration number
-      <div class="row" style="margin:0"><input id="rpPlate" value="${esc(r.plate)}" placeholder="KA 01 AB 1234" style="flex:1;text-transform:uppercase"><button class="ghost" data-a="ocr">Read plate</button></div>
-      <span id="rpPlateMsg" class="muted"></span>
-    </label>
+    <div class="row">
+      <button class="ghost" data-a="analyse">Reanalyse photos</button>
+      <button class="ghost" data-a="crop" aria-pressed="false">Select plate area</button>
+    </div>
+    <label for="rpPlate">Registration number</label>
+    <div>
+      <div class="row" style="margin:0"><input id="rpPlate" value="${esc(r.plate)}" placeholder="Enter registration" style="flex:1;text-transform:uppercase"><button class="ghost" data-a="ocr">Read plate</button></div>
+      <span id="rpPlateMsg" class="muted" role="status"></span>
+    </div>
     <div class="two">
       <label>Vehicle type <select id="rpType">${vt.map((v) => `<option ${v === r.vehicleType ? 'selected' : ''} value="${v}">${v || '—'}</option>`).join('')}</select></label>
       <label>Colour <input id="rpColor" value="${esc(r.color)}" placeholder="e.g. white"></label>
@@ -732,8 +754,50 @@ function openReport(r) {
     const saved = await db.updateReport(r.id, (current) => ({ ...current, ...fields }));
     if (saved) Object.assign(r, saved);
   };
+  const photo = $('rpMain');
+  const crop = $('rpCrop');
+  const box = $('rpBox');
+  const cropButton = dlg.querySelector('[data-a="crop"]');
+  let region, anchor;
+  function toggleCrop(on) {
+    cropButton.setAttribute('aria-pressed', String(on));
+    crop.classList.toggle('selecting', on);
+    if (!on) { anchor = null; region = null; box.hidden = true; }
+  }
+  function pointer(event) {
+    const rect = photo.getBoundingClientRect();
+    const scale = Math.min(rect.width / photo.naturalWidth, rect.height / photo.naturalHeight);
+    const width = photo.naturalWidth * scale, height = photo.naturalHeight * scale;
+    const offsetX = (rect.width - width) / 2, offsetY = (rect.height - height) / 2;
+    const clamp = (value) => Math.max(0, Math.min(1, value));
+    return { x: clamp((event.clientX - rect.left - offsetX) / width), y: clamp((event.clientY - rect.top - offsetY) / height), offsetX, offsetY, width, height };
+  }
+  function drawCrop(point) {
+    const x = Math.min(anchor.x, point.x), y = Math.min(anchor.y, point.y);
+    const w = Math.abs(point.x - anchor.x), h = Math.abs(point.y - anchor.y);
+    region = w > 0.006 && h > 0.006 ? [x, y, w, h] : null;
+    box.hidden = !region;
+    Object.assign(box.style, { left: `${point.offsetX + x * point.width}px`, top: `${point.offsetY + y * point.height}px`,
+      width: `${w * point.width}px`, height: `${h * point.height}px` });
+  }
+  photo.onpointerdown = (event) => {
+    if (!crop.classList.contains('selecting') || !photo.naturalWidth) return;
+    event.preventDefault();
+    anchor = pointer(event);
+    region = null; box.hidden = true;
+    photo.setPointerCapture(event.pointerId);
+  };
+  photo.onpointermove = (event) => { if (anchor) drawCrop(pointer(event)); };
+  photo.onpointerup = (event) => {
+    if (!anchor) return;
+    drawCrop(pointer(event)); anchor = null;
+    $('rpPlateMsg').textContent = region ? 'Plate area selected. Tap Read plate.' : 'Drag a box around the whole plate.';
+    dlg.querySelector('[data-a="ocr"]').scrollIntoView({ block: 'nearest' });
+  };
+  photo.onpointercancel = () => { anchor = null; };
   function selectFrame(index) {
     if (!urls[index]) return;
+    toggleCrop(false);
     sel = index; $('rpMain').src = urls[index]; $('rpPhotoLink').href = urls[index];
     dlg.querySelectorAll('.strip-photos img').forEach((image) => image.classList.toggle('sel', +image.dataset.i === index));
   }
@@ -742,22 +806,47 @@ function openReport(r) {
     if (img) { selectFrame(+img.dataset.i); return; }
     const a = e.target.dataset.a;
     if (a === 'vehicle') $('rpType').value = vehicle.type;
+    if (a === 'color') $('rpColor').value = vehicle.color;
     if (a === 'plate') { $('rpPlate').value = plate.value; plateMsg(); }
     if (a === 'vehicle-frame') selectFrame(vehicle.frame);
     if (a === 'plate-frame') selectFrame(plate.frame);
     if (a === 'close') dlg.close();
     if (a === 'save') { await collect(); thumbUrls.delete(r.id); toast('Saved'); dlg.close(); renderReports(); }
     if (a === 'del') { if (confirm('Delete this report and its photos?')) { await db.del('reports', r.id); dlg.close(); renderReports(); } }
-    if (a === 'ocr') {
+    if (a === 'crop') {
+      const on = !crop.classList.contains('selecting');
+      toggleCrop(on);
+      $('rpPlateMsg').textContent = on ? 'Drag a box around the whole plate in the photo.' : '';
+      if (on) photo.scrollIntoView({ block: 'nearest' });
+    }
+    if (a === 'ocr' || a === 'analyse') {
       const progress = $('rpPlateMsg');
-      const input = $('rpPlate');
-      progress.textContent = 'Loading OCR engine…';
+      const fields = { plate: $('rpPlate'), vehicleType: $('rpType'), color: $('rpColor') };
+      const before = Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.value]));
+      const buttons = [...dlg.querySelectorAll('[data-a="ocr"], [data-a="analyse"]')];
+      buttons.forEach((button) => { button.disabled = true; });
+      const frame = sel;
+      const selectedRegion = region;
+      const update = (m) => { if (m.status) progress.textContent = m.status; };
+      progress.textContent = 'Analysing photos on this device…';
       try {
-        const res = await ocrPlate(r.photos[sel].blob, (m) => { if (m.status) progress.textContent = `${m.status} ${m.progress ? Math.round(m.progress * 100) + '%' : ''}`; });
-        if (!input.isConnected || !dlg.open) return;
-        if (res.plates.length) { input.value = res.plates[0]; plateMsg(); }
-        else progress.textContent = `No plate found (read: "${res.text.trim().slice(0, 40)}"). Try another frame or type it.`;
+        const analysis = a === 'analyse' ? await analyzeEvidence(r.photos, update)
+          : selectedRegion ? { plate: await readPlateCrop(r.photos[frame].blob, selectedRegion, update) }
+            : await analyzeEvidence([r.photos[frame]], update);
+        if (!progress.isConnected || !dlg.open) return;
+        const suggested = { plate: analysis.plate?.value, vehicleType: analysis.vehicle?.type, color: analysis.vehicle?.color };
+        const applied = [];
+        for (const [key, field] of Object.entries(fields)) {
+          if (suggested[key] && field.value === before[key] && (!field.value.trim() || (key === 'plate' && a === 'ocr' && selectedRegion))) {
+            field.value = suggested[key];
+            applied.push(key === 'vehicleType' ? 'vehicle type' : key);
+          }
+        }
+        progress.textContent = applied.length ? `Filled ${applied.join(', ')}. Review and tap Save.`
+          : analysis.plate ? `Read ${analysis.plate.value}. Compare it with the existing entry.`
+            : 'No reliable plate read. Try selecting a tighter plate area, another frame, or entering it manually.';
       } catch (err) { progress.textContent = err.message; }
+      finally { buttons.forEach((button) => { button.disabled = false; }); }
     }
     if (a === 'share') {
       await collect();

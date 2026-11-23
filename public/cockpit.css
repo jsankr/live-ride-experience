@@ -275,3 +275,13 @@ main { padding: 18px 16px 12px; }
 }
 .noise-meter { min-height: 24px; text-align: left; }
 .cockpit-noise:has(dialog[open]) .noise-meter { text-decoration: underline; }
+
+.evidence-crop { position: relative; }
+.evidence-crop .main-photo { display: block; }
+.evidence-crop.selecting .main-photo { cursor: crosshair; touch-action: none; user-select: none; }
+.evidence-crop span {
+  position: absolute;
+  pointer-events: none;
+  border: 2px solid #ffe086;
+  background: #ffe08626;
+}

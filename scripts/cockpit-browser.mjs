@@ -186,7 +186,10 @@ try {
     ] }) };
     window.Tesseract = { createWorker: async () => ({
       setParameters: async () => {},
-      recognize: async () => ({ data: { text: 'KA 01 AB 1234', confidence: 95 } }),
+      recognize: async (blob) => {
+        if (blob.type !== 'image/png') throw new Error('Expected a processed OCR region');
+        return { data: { text: 'KA 01 AB 1234', confidence: 95 } };
+      },
     }) };
   });
   const evidencePage = await evidence.newPage();
@@ -204,8 +207,30 @@ try {
   });
   await evidencePage.locator('#wsList .item').first().click();
   await evidencePage.getByText('Air at capture · India AQI 233', { exact: false }).waitFor();
-  await evidencePage.getByRole('button', { name: 'Use Two-wheeler' }).click();
-  await evidencePage.getByRole('button', { name: 'Use KA01AB1234' }).click();
+  assert.equal(await evidencePage.locator('#rpType').inputValue(), 'Two-wheeler');
+  assert.equal(await evidencePage.locator('#rpPlate').inputValue(), 'KA01AB1234');
+  const color = await evidencePage.evaluate(async () => {
+    const { analyzeEvidence } = await import('/js/evidence-analysis.js');
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 480;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#c81818';
+    ctx.fillRect(0, 0, 640, 480);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg'));
+    return (await analyzeEvidence([{ blob }])).vehicle.color;
+  });
+  assert.equal(color, 'Red');
+  await evidencePage.locator('#rpPlate').fill('');
+  await evidencePage.getByRole('button', { name: 'Select plate area' }).click();
+  const bounds = await evidencePage.locator('#rpMain').boundingBox();
+  await evidencePage.mouse.move(bounds.x + bounds.width * 0.37, bounds.y + bounds.height * 0.46);
+  await evidencePage.mouse.down();
+  await evidencePage.mouse.move(bounds.x + bounds.width * 0.63, bounds.y + bounds.height * 0.55, { steps: 5 });
+  await evidencePage.mouse.up();
+  await evidencePage.getByText('Plate area selected. Tap Read plate.').waitFor();
+  await evidencePage.getByRole('button', { name: 'Read plate' }).click();
+  await evidencePage.getByText('Filled plate. Review and tap Save.').waitFor();
   await evidencePage.getByRole('button', { name: 'Save', exact: true }).click();
   const report = await evidencePage.evaluate(async () => {
     const { db } = await import('/js/db.js');

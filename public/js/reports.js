@@ -35,6 +35,10 @@ export class EvidenceCamera {
     this.stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false,
     });
+    const track = this.stream.getVideoTracks()[0];
+    if (track?.getCapabilities?.().focusMode?.includes('continuous')) {
+      track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+    }
     this.video.srcObject = this.stream;
     await this.video.play();
     this.canvas = document.createElement('canvas');
@@ -110,7 +114,7 @@ export async function saveReport({ frames, snapshot, rideId, capturedAt = Date.n
 
 let tesseractWorker, ocrProgress;
 let ocrQueue = Promise.resolve();
-export function ocrPlate(blob, onProgress) {
+export function ocrPlate(blob, onProgress, segmentation = '11') {
   const job = ocrQueue.then(async () => {
     ocrProgress = onProgress;
     try {
@@ -130,6 +134,7 @@ export function ocrPlate(blob, onProgress) {
         await worker.setParameters({ tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ' });
         tesseractWorker = worker;
       }
+      await tesseractWorker.setParameters({ tessedit_pageseg_mode: segmentation });
       const { data } = await tesseractWorker.recognize(blob);
       return { text: data.text, plates: findPlates(data.text), confidence: data.confidence };
     } finally { ocrProgress = null; }
