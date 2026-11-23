@@ -46,3 +46,30 @@ export function relativeLevel(samples) {
   const meanSquare = samples.reduce((sum, sample) => sum + sample ** 2, 0) / samples.length;
   return Math.max(-90, Math.min(0, 10 * Math.log10(meanSquare || 1e-9)));
 }
+
+function highRisk(value, caution, danger, labels) {
+  if (!Number.isFinite(value)) return null;
+  const band = value >= danger ? 2 : value >= caution ? 1 : 0;
+  return { tone: ['good', 'caution', 'danger'][band], label: labels[band] };
+}
+
+export function roadStatuses(data) {
+  const { weather_code: code, visibility, precipitation, probability, wind_speed_10m: wind, wind_gusts_10m: gust } = data ?? {};
+  const storm = code >= 95 || [56, 57, 66, 67].includes(code);
+  const rain = storm || precipitation >= 2.5
+    ? { tone: 'danger', label: storm ? 'Storm / freezing rain' : 'Heavy precipitation' }
+    : highRisk(Math.max(probability ?? -Infinity, precipitation > 0 ? 30 : -Infinity), 30, Infinity, ['Low chance', 'Rain caution']);
+  return {
+    weather: Number.isFinite(code) ? { tone: storm ? 'danger' : code >= 45 ? 'caution' : 'good' } : null,
+    visibility: highRisk(Number.isFinite(visibility) ? -visibility : null, -5000, -1000, ['Clear visibility', 'Reduced visibility', 'Very low visibility']),
+    rain,
+    wind: highRisk(Math.max(wind ?? -Infinity, gust ?? -Infinity), 35, 60, ['Light / moderate', 'Strong wind', 'High wind']),
+  };
+}
+
+export function meterStatus(value) {
+  if (!Number.isFinite(value)) return null;
+  if (value > 90) return { tone: 'danger', label: 'Above 90 dBA' };
+  if (value >= 85) return { tone: 'caution', label: 'Elevated' };
+  return { tone: 'good', label: 'Below 85 dBA' };
+}

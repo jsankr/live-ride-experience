@@ -243,3 +243,35 @@ main { padding: 18px 16px 12px; }
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
   .glass, .topbar, .tabbar { background: var(--surface-1); backdrop-filter: none; }
 }
+
+:root {
+  --reading-good: #7ee4aa;
+  --reading-caution: #ffdb8c;
+  --reading-danger: #ff9a9a;
+}
+:root[data-theme="light"] {
+  --reading-good: #14683c;
+  --reading-caution: #795000;
+  --reading-danger: #a2222d;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) {
+    --reading-good: #14683c;
+    --reading-caution: #795000;
+    --reading-danger: #a2222d;
+  }
+}
+[data-tone="good"] { --reading-tone: var(--reading-good); }
+[data-tone="caution"] { --reading-tone: var(--reading-caution); }
+[data-tone="danger"] { --reading-tone: var(--reading-danger); }
+.cockpit-metric[data-tone], .cockpit-noise[data-tone] {
+  border-color: var(--reading-tone, var(--glass-edge));
+}
+.cockpit-metric[data-tone] .metric-value,
+.cockpit-metric[data-tone] .metric-caption,
+.air-readings [data-tone], .air-readings [data-tone] b,
+#airStatus[data-tone], .noise-meter, #reportDialog [data-tone] {
+  color: var(--reading-tone, var(--text-secondary));
+}
+.noise-meter { min-height: 24px; text-align: left; }
+.cockpit-noise:has(dialog[open]) .noise-meter { text-decoration: underline; }

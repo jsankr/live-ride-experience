@@ -37,9 +37,11 @@ function mockAirQuality(context) {
   return context.route('https://air-quality-api.open-meteo.com/**', (route) => {
     const params = new URL(route.request().url()).searchParams;
     assert.match(params.get('latitude'), /^-?\d+\.\d{2}$/);
-    return route.fulfill({ json: { current: {
-      time: new Date().toISOString().slice(0, 16), us_aqi: 77, pm2_5: 20, pm10: 31, nitrogen_dioxide: 9, ozone: 62,
-    } } });
+    const now = Date.now() - Date.now() % 3600000;
+    const time = Array.from({ length: 24 }, (_, i) => new Date(now - (23 - i) * 3600000).toISOString().slice(0, 16));
+    const fixture = { pm2_5: 100, pm10: 75, nitrogen_dioxide: 9, ozone: 120, carbon_monoxide: 365, sulphur_dioxide: 8 };
+    const hourly = Object.fromEntries(Object.entries(fixture).map(([key, value]) => [key, Array(24).fill(value)]));
+    return route.fulfill({ json: { current: { time: time.at(-1), ...fixture }, hourly: { time, ...hourly } } });
   });
 }
 
@@ -126,7 +128,9 @@ try {
     while (sim.state.t < end) sim.step(0.02);
   });
   await page.getByRole('button', { name: 'Track air quality' }).click();
-  await page.getByText('Moderate · Estimate', { exact: false }).waitFor();
+  await page.getByText('Poor · Estimate', { exact: false }).waitFor();
+  assert.equal(await page.locator('#airStatus').getAttribute('data-tone'), 'danger');
+  assert.equal(await page.locator('.metric-visibility').last().getAttribute('data-tone'), 'good');
   await page.getByText('Recorded GPS trace', { exact: false }).waitFor();
   await page.getByRole('button', { name: 'Road', exact: true }).click();
   await page.getByText('Last 30 s · m/s²').waitFor();
@@ -147,6 +151,14 @@ try {
     }
   }
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: 'Uncalibrated · Add dBA' }).click();
+  await page.getByLabel('Meter reading (dBA)').fill('90');
+  await page.getByRole('button', { name: 'Apply reading' }).click();
+  assert.equal(await page.locator('.cockpit-noise').getAttribute('data-tone'), 'caution');
+  await page.getByRole('button', { name: '90 dBA · Elevated · Meter' }).click();
+  await page.getByLabel('Meter reading (dBA)').fill('90.1');
+  await page.getByRole('button', { name: 'Apply reading' }).click();
+  assert.equal(await page.locator('.cockpit-noise').getAttribute('data-tone'), 'danger');
   await page.getByRole('navigation', { name: 'RideLens' }).getByRole('button', { name: 'Setup' }).click();
   await page.locator('#units').selectOption('imperial');
   await page.locator('#theme').selectOption('light');
@@ -181,7 +193,7 @@ try {
   evidencePage.on('pageerror', (error) => errors.push(error.message));
   await evidencePage.goto(base);
   await evidencePage.getByRole('region', { name: 'Air pollution' }).getByRole('button', { name: 'Track air quality' }).click();
-  await evidencePage.getByText('Moderate · Estimate', { exact: false }).waitFor();
+  await evidencePage.getByText('Poor · Estimate', { exact: false }).waitFor();
   await evidencePage.getByRole('button', { name: 'Wrong-side', exact: true }).click();
   assert.equal(await evidencePage.getByRole('region', { name: 'Air pollution' }).count(), 0);
   await evidencePage.getByRole('button', { name: 'Start camera' }).click();
@@ -191,7 +203,7 @@ try {
     return (await db.all('reports')).some((report) => report.analysis?.status === 'complete');
   });
   await evidencePage.locator('#wsList .item').first().click();
-  await evidencePage.getByText('Air at capture · US AQI 77', { exact: false }).waitFor();
+  await evidencePage.getByText('Air at capture · India AQI 233', { exact: false }).waitFor();
   await evidencePage.getByRole('button', { name: 'Use Two-wheeler' }).click();
   await evidencePage.getByRole('button', { name: 'Use KA01AB1234' }).click();
   await evidencePage.getByRole('button', { name: 'Save', exact: true }).click();

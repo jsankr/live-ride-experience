@@ -22,14 +22,21 @@ export function setupEvidenceLocation(getRideFix) {
     request = controller;
     const timer = setTimeout(() => controller.abort(), 10000);
     status.textContent = 'Updating air quality…';
+    delete status.dataset.tone;
     try {
       const data = await loadAirQuality(cell, controller.signal);
       if (request !== controller) return;
       reading = { ...data, cell };
-      status.textContent = `${airCategory(data.us_aqi)} · Estimate for ${new Date(data.time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
-      const rows = [['US AQI', data.us_aqi], ['PM₂.₅', data.pm2_5], ['PM₁₀', data.pm10], ['NO₂', data.nitrogen_dioxide], ['Ozone', data.ozone]];
-      stats.innerHTML = rows.map(([label, value]) => `<span>${label} <b>${value == null ? '—' : Math.round(value)}</b></span>`).join('')
-        + '<span aria-label="Pollutant concentrations in micrograms per cubic metre">µg/m³</span>';
+      const category = airCategory(data.india_aqi);
+      status.textContent = `${category.label} · Estimate for ${new Date(data.time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+      status.dataset.tone = category.tone;
+      stats.innerHTML = `<span data-tone="${category.tone}">India AQI <b>${data.india_aqi ?? '—'}</b></span>`
+        + data.pollutants.map((pollutant) => {
+          const band = airCategory(pollutant.index);
+          const detail = `${pollutant.label} ${pollutant.value} ${pollutant.unit} · ${pollutant.hours} h mean · ${band.label}`;
+          return `<span data-tone="${band.tone}" title="${detail}" aria-label="${detail}">${pollutant.label} <b>${pollutant.value}</b></span>`;
+        }).join('')
+        + '<span>8/24 h means</span>';
       stats.hidden = false;
     } catch {
       if (request === controller) status.textContent = reading ? 'Update unavailable. Showing the last estimate.' : 'Air quality unavailable. Retrying when online.';
@@ -74,6 +81,7 @@ export function setupEvidenceLocation(getRideFix) {
       request = null;
       reading = null;
       stats.hidden = true;
+      delete status.dataset.tone;
       status.textContent = 'Hourly estimate · uses approximate location';
     }
     updateWatch();

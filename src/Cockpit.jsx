@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useNoise, useWeather } from './useConditions.js';
-import { weatherLabel, windDirection } from './conditions.js';
+import { meterStatus, roadStatuses, weatherLabel, windDirection } from './conditions.js';
 
 let cockpitState = { view: 'live', route: [], timeline: [] };
 function subscribe(listener) {
@@ -19,11 +19,11 @@ const icons = { route: '◇', speed: '◷', rain: '◈', visibility: '◎', wind
 const number = (value, digits = 0) => Number.isFinite(value) ? value.toFixed(digits) : '—';
 const convert = (value, factor, offset = 0) => Number.isFinite(value) ? value * factor + offset : null;
 
-function Metric({ kind, label, value, unit, detail }) {
-  return <article className={`cockpit-metric glass metric-${kind}`}>
+function Metric({ kind, label, value, unit, detail, status }) {
+  return <article className={`cockpit-metric glass metric-${kind}`} data-tone={status?.tone}>
     <div className="metric-title"><span aria-hidden="true">{icons[kind]}</span>{label}</div>
     <div className="metric-value">{value}{unit && <small>{unit}</small>}</div>
-    {detail && <div className="metric-caption">{detail}</div>}
+    {(status?.label || detail) && <div className="metric-caption" title={detail}>{status?.label || detail}</div>}
   </article>;
 }
 
@@ -122,6 +122,7 @@ const AirQuality = React.memo(function AirQuality() {
 
 function Weather({ weather, imperial }) {
   const { data, status, message } = weather;
+  const conditions = roadStatuses(data);
   const busy = status === 'loading' || status === 'locating';
   const tempUnit = imperial ? '°F' : '°C';
   const temp = number(convert(data?.temperature_2m, imperial ? 1.8 : 1, imperial ? 32 : 0));
@@ -138,10 +139,10 @@ function Weather({ weather, imperial }) {
       <button className="cockpit-control" disabled={busy} onClick={weather.locate}>{data ? 'Refresh' : 'Get weather'}</button>
     </div>
     <div className="condition-grid">
-      <Metric kind="weather" label="Weather" value={temp} unit={tempUnit} detail={data ? weatherLabel(data.weather_code) : 'Location needed'} />
-      <Metric kind="visibility" label="Visibility" value={visibility} unit={imperial ? 'mi' : 'km'} detail="Hourly forecast" />
-      <Metric kind="rain" label="Rain chance" value={number(data?.probability)} unit="%" detail={Number.isFinite(data?.precipitation) ? `${rain} ${imperial ? 'in' : 'mm'} precipitation` : 'Hourly forecast'} />
-      <Metric kind="wind" label="Wind" value={weatherWind} unit={speedUnit} detail={data ? `${windDirection(data.wind_direction_10m)} · Gusts ${gust} ${speedUnit}` : 'At 10 m above ground'} />
+      <Metric kind="weather" status={conditions.weather} label="Weather" value={temp} unit={tempUnit} detail={data ? weatherLabel(data.weather_code) : 'Location needed'} />
+      <Metric kind="visibility" status={conditions.visibility} label="Visibility" value={visibility} unit={imperial ? 'mi' : 'km'} detail="Hourly forecast" />
+      <Metric kind="rain" status={conditions.rain} label="Rain chance" value={number(data?.probability)} unit="%" detail={Number.isFinite(data?.precipitation) ? `${rain} ${imperial ? 'in' : 'mm'} precipitation` : 'Hourly forecast'} />
+      <Metric kind="wind" status={conditions.wind && { tone: conditions.wind.tone }} label="Wind" value={weatherWind} unit={speedUnit} detail={data ? `${windDirection(data.wind_direction_10m)} · Gusts ${gust} ${speedUnit}${conditions.wind && conditions.wind.tone !== 'good' ? ` · ${conditions.wind.label}` : ''}` : 'At 10 m above ground'} />
     </div>
     <div className="weather-attribution">
       <a href="https://open-meteo.com/en/docs/air-quality-api" target="_blank" rel="noreferrer">Open-Meteo / CAMS</a>
@@ -152,16 +153,37 @@ function Weather({ weather, imperial }) {
 }
 
 function Noise({ noise }) {
+  const dialog = useRef(null);
+  const [meter, setMeter] = useState(null);
+  const band = meterStatus(meter?.value);
   const active = noise.status === 'active';
   const pending = noise.status === 'pending';
-  return <section className="cockpit-noise glass" aria-label="Ambient noise">
+  return <section className="cockpit-noise glass" data-tone={band?.tone} aria-label="Ambient noise">
     <div className="panel-heading">
       <div><h2>Ambient noise</h2><p role="status">{noise.message || (pending ? 'Requesting microphone…' : active ? 'Microphone · relative level' : noise.history.length ? 'Mic off · last session' : 'Microphone off')}</p></div>
       <button className="cockpit-control" onClick={active || pending ? noise.disable : noise.start}>{active ? 'Stop' : pending ? 'Cancel' : 'Enable mic'}</button>
     </div>
     <div className="noise-level"><strong>{number(noise.level)}<small>dBFS</small></strong><span>{noise.peak == null ? 'Peak —' : `Peak ${number(noise.peak)} dBFS`}</span></div>
     <Plot values={noise.history} min={-90} max={0} kind="noise" />
-    <p className="noise-note">{noise.history.length ? 'Last 30 s · ' : ''}Uncalibrated · no audio saved</p>
+    <button className="cockpit-link noise-meter" onClick={() => dialog.current.showModal()}>
+      {meter ? `${meter.value} dBA · ${band.label} · Meter` : 'Uncalibrated · Add dBA'}
+    </button>
+    <dialog ref={dialog} className="sheet" aria-labelledby="noiseMeterTitle">
+      <form className="sheet-body" onSubmit={(event) => {
+        event.preventDefault();
+        const value = new FormData(event.currentTarget).get('soundLevel');
+        setMeter(value === '' ? null : { value: Number(value) });
+        dialog.current.close();
+      }}>
+        <h2 id="noiseMeterTitle">Sound-level meter</h2>
+        <p>The phone shows relative dBFS. Enter a dBA reading from a calibrated meter to highlight readings above 90 dBA. Exposure risk also depends on duration. No audio is saved.</p>
+        <label>Meter reading (dBA)<input key={meter?.value} name="soundLevel" type="number" min="0" max="180" step="0.1" defaultValue={meter?.value ?? ''} /></label>
+        <div className="row">
+          <button type="submit">Apply reading</button>
+          <button type="button" className="ghost" onClick={() => dialog.current.close()}>Cancel</button>
+        </div>
+      </form>
+    </dialog>
   </section>;
 }
 
@@ -178,6 +200,9 @@ export function Cockpit() {
   const noise = useNoise(liveView);
   const series = ride.timeline.map((point) => trend === 'speed' ? point.v * distanceFactor : point.vert);
   const trendMax = Math.max(trend === 'speed' ? (imperial ? 40 : 60) : 2, ...series);
+  const score = snap?.t && recording ? snap.scores.overall : null;
+  const scoreStatus = !Number.isFinite(score) ? null : score >= 75 ? { tone: 'good', label: 'High score' }
+    : score >= 50 ? { tone: 'caution', label: 'Fair score' } : { tone: 'danger', label: 'Low score' };
   const elapsed = Math.max(0, Math.floor((snap?.elapsedMs ?? 0) / 1000));
   const elapsedLabel = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}`;
   const speed = snap?.speedSrc && snap.speedSrc !== 'none' ? number(snap.speedKmh * distanceFactor) : '—';
@@ -205,7 +230,7 @@ export function Cockpit() {
       <Metric kind="speed" label="Speed" value={speed} unit={speedUnit} detail={speed !== '—' ? snap.speedSrc.toUpperCase() : 'GPS or OBD'} />
       <Metric kind="route" label="Distance" value={snap?.fix ? number(snap.distanceKm * distanceFactor, 1) : '—'} unit={distanceUnit} detail="GPS track" />
       <Metric kind="visibility" label="Lean" value={snap?.t && recording ? number(Math.abs(snap.lean)) : '—'} unit="°" detail={snap?.lean > 1 ? 'Right' : snap?.lean < -1 ? 'Left' : 'Phone motion'} />
-      <Metric kind="weather" label="Ride score" value={snap?.t && recording ? number(snap.scores.overall) : '—'} unit="/100" detail="Ride analysis" />
+      <Metric kind="weather" label="Ride score" value={number(score)} unit="/100" detail="Ride analysis" status={scoreStatus} />
     </div>
     <div className="cockpit-panels">
       <Route track={ride.route} onDetails={() => toggleDetails(true, true)} />

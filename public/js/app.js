@@ -1,4 +1,4 @@
-import { airCell } from './air-quality.js';
+import { airCategory, airCell } from './air-quality.js';
 import { setupEvidenceLocation } from './evidence-location.js';
 import { analyzeEvidence, loadDetector } from './evidence-analysis.js';
 import { createAnalyzer, comfortClass, comfortLegend } from './analytics.js';
@@ -706,7 +706,7 @@ function openReport(r) {
     <p class="fine"><a id="rpPhotoLink" href="${urls[sel]}" target="_blank" rel="noopener">Open full-resolution photo</a></p>
     <div class="strip-photos">${urls.map((u, i) => `<img src="${u}" data-i="${i}" class="${i === sel ? 'sel' : ''}" alt="frame ${i + 1}">`).join('')}</div>
     <p class="fine">${new Date(r.t).toLocaleString()} · ${r.lat != null ? `<a href="https://maps.google.com/?q=${r.lat},${r.lon}" target="_blank" rel="noopener">${r.lat.toFixed(5)}, ${r.lon.toFixed(5)}</a> (±${Math.round(r.accuracy || 0)} m)` : 'no GPS fix'}${r.mySpeedKmh != null ? ` · you at ${fmtSpeed(r.mySpeedKmh)} ${speedUnit()}` : ''}</p>
-    ${air ? `<p class="fine">Air at capture · US AQI ${esc(air.us_aqi ?? '—')} · PM₂.₅ ${esc(air.pm2_5 ?? '—')} µg/m³ · Open-Meteo estimate</p>` : ''}
+    ${air ? `<p class="fine" data-tone="${airCategory(air.india_aqi).tone}">Air at capture · ${air.us_aqi != null ? `US AQI ${esc(air.us_aqi)}` : `India AQI ${esc(air.india_aqi ?? '—')}`} · Open-Meteo estimate</p>` : ''}
     ${r.analysis ? `<p class="fine">${r.analysis.status === 'pending' ? 'Analysis pending. Reopen to check results.' : r.analysis.status === 'partial' ? 'Some analysis was unavailable. Review the saved photos.' : 'Review automatic suggestions against the photos.'}</p>` : ''}
     ${vehicle ? `<div class="row"><button class="ghost" data-a="vehicle">Use ${esc(vehicle.type)}</button><button class="ghost" data-a="vehicle-frame">Vehicle frame ${vehicle.frame + 1}${vehicle.rider ? ' · possible rider' : ''}</button></div>` : ''}
     ${plate ? `<div class="row"><button class="ghost" data-a="plate">Use ${esc(plate.value)}</button><button class="ghost" data-a="plate-frame">Plate frame ${plate.frame + 1}</button></div>` : ''}

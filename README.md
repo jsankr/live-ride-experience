@@ -19,7 +19,9 @@ Screenshots use the ride simulator, fixed weather and air-quality responses, and
 - **Get weather** requests local conditions from [Open-Meteo](https://open-meteo.com/) using coordinates rounded to two decimal places. It shows current temperature, weather status, precipitation, wind direction and gusts, plus hourly rain probability and visibility. Once enabled, it refreshes during a ride while the cockpit is visible. **Clear weather** clears the forecast and stops automatic requests.
 - **Enable mic** tracks the current and peak relative sound levels and a 30-second trend. Readings are in dBFS, relative to the microphone’s recording range. Wind, mounting, and device gain affect the readings. Calibrated dB SPL/dBA and regulatory noise limits require a sound-level meter. RideLens never saves or uploads the audio. Monitoring stops when you leave the cockpit or background the app.
 
-Open **Live → Road conditions → Track air quality** to view local US AQI, PM₂.₅, PM₁₀, nitrogen dioxide, and ozone. Readings are hourly Open-Meteo/CAMS estimates based on rounded coordinates and refresh as you ride. A recent reading for the capture area is included in the evidence report.
+Open **Live → Road conditions → Track air quality** to see an estimated India AQI and colour-coded pollutant readings. The calculation applies CPCB breakpoints to Open-Meteo/CAMS 24-hour particulate, nitrogen dioxide and sulphur dioxide means, plus 8-hour ozone and carbon monoxide means. No local station feed, lead or ammonia is used. A recent estimate for the capture area is included in evidence reports. See the [CPCB National AQI](https://cpcb.nic.in/National-Air-Quality-Index/).
+
+Green marks lower readings, yellow marks caution, and red marks elevated risk. Ride score colours describe the app's heuristic. Weather colours are dashboard cues based on forecast wind, visibility, precipitation and conditions. Open **Uncalibrated · Add dBA** to enter a calibrated sound-level meter reading. Above 90 dBA is red, 85–90 dBA is yellow, and below 85 dBA is green. Exposure risk also depends on duration.
 
 ### Ride reports
 
