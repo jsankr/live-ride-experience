@@ -33,6 +33,16 @@ function microphoneFixture() {
   return wave;
 }
 
+function mockAirQuality(context) {
+  return context.route('https://air-quality-api.open-meteo.com/**', (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    assert.match(params.get('latitude'), /^-?\d+\.\d{2}$/);
+    return route.fulfill({ json: { current: {
+      time: new Date().toISOString().slice(0, 16), us_aqi: 77, pm2_5: 20, pm10: 31, nitrogen_dioxide: 9, ozone: 62,
+    } } });
+  });
+}
+
 try {
   const port = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Server startup timed out')), 8000);
@@ -54,6 +64,7 @@ try {
     geolocation: { latitude: 12.9716, longitude: 77.5946 }, permissions: ['geolocation', 'microphone'],
     serviceWorkers: 'block',
   });
+  await mockAirQuality(context);
   await context.addInitScript(() => {
     // The fixture supplies ride fixes while one-shot geolocation still drives weather.
     Geolocation.prototype.watchPosition = () => 1;
@@ -114,6 +125,8 @@ try {
     sim.state.t = end - 18 * 60000;
     while (sim.state.t < end) sim.step(0.02);
   });
+  await page.getByRole('button', { name: 'Track air quality' }).click();
+  await page.getByText('Moderate · Estimate', { exact: false }).waitFor();
   await page.getByText('Recorded GPS trace', { exact: false }).waitFor();
   await page.getByRole('button', { name: 'Road', exact: true }).click();
   await page.getByText('Last 30 s · m/s²').waitFor();
@@ -152,13 +165,7 @@ try {
     viewport: { width: 390, height: 844 }, geolocation: { latitude: 12.9716, longitude: 77.5946 },
     permissions: ['camera', 'geolocation'], serviceWorkers: 'block', acceptDownloads: true,
   });
-  await evidence.route('https://air-quality-api.open-meteo.com/**', (route) => {
-    const params = new URL(route.request().url()).searchParams;
-    assert.equal(params.get('latitude'), '12.97');
-    return route.fulfill({ json: { current: {
-      time: new Date().toISOString().slice(0, 16), us_aqi: 77, pm2_5: 20, pm10: 31, nitrogen_dioxide: 9, ozone: 62,
-    } } });
-  });
+  await mockAirQuality(evidence);
   await evidence.addInitScript(() => {
     window.tf = {};
     window.cocoSsd = { load: async () => ({ detect: async () => [
@@ -173,9 +180,10 @@ try {
   const evidencePage = await evidence.newPage();
   evidencePage.on('pageerror', (error) => errors.push(error.message));
   await evidencePage.goto(base);
-  await evidencePage.getByRole('button', { name: 'Wrong-side', exact: true }).click();
-  await evidencePage.getByRole('button', { name: 'Track air quality' }).click();
+  await evidencePage.getByRole('region', { name: 'Air pollution' }).getByRole('button', { name: 'Track air quality' }).click();
   await evidencePage.getByText('Moderate · Estimate', { exact: false }).waitFor();
+  await evidencePage.getByRole('button', { name: 'Wrong-side', exact: true }).click();
+  assert.equal(await evidencePage.getByRole('region', { name: 'Air pollution' }).count(), 0);
   await evidencePage.getByRole('button', { name: 'Start camera' }).click();
   await evidencePage.getByRole('button', { name: 'Capture wrong-side vehicle' }).click();
   await evidencePage.waitForFunction(async () => {
@@ -198,9 +206,10 @@ try {
   assert.equal(report.lat, 12.9716);
   assert.ok(report.gpsTime);
   assert.ok(report.photos.length >= 4 && report.photos.every((size) => size > 0));
+  await evidencePage.getByRole('button', { name: 'Stop camera' }).click();
+  await evidencePage.getByRole('button', { name: 'Live', exact: true }).click();
   await evidencePage.getByRole('button', { name: 'Stop tracking' }).click();
   assert.equal(await evidencePage.locator('#airStats').isHidden(), true);
-  await evidencePage.getByRole('button', { name: 'Stop camera' }).click();
   assert.deepEqual(errors, []);
 
   const offline = await browser.newContext();

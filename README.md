@@ -12,12 +12,14 @@ The React cockpit puts speed, distance, lean, ride score, weather, a route previ
 | --- | --- |
 | <img src="docs/screenshots/cockpit-desktop.png" alt="Desktop RideLens grid showing a GPS route, four weather readings and two live charts" width="720"> | <img src="docs/screenshots/cockpit-phone.png" alt="Phone RideLens cockpit with readings and charts above the navigation" width="280"> |
 
-Screenshots use the ride simulator, a fixed weather response, and Chromium’s test microphone. The app reads your device and forecast provider in normal use.
+Screenshots use the ride simulator, fixed weather and air-quality responses, and Chromium’s test microphone. The app reads your device and forecast provider in normal use.
 
 ### Weather and sound
 
 - **Get weather** requests local conditions from [Open-Meteo](https://open-meteo.com/) using coordinates rounded to two decimal places. It shows current temperature, weather status, precipitation, wind direction and gusts, plus hourly rain probability and visibility. Once enabled, it refreshes during a ride while the cockpit is visible. **Clear weather** clears the forecast and stops automatic requests.
 - **Enable mic** tracks the current and peak relative sound levels and a 30-second trend. Readings are in dBFS, relative to the microphone’s recording range. Wind, mounting, and device gain affect the readings. Calibrated dB SPL/dBA and regulatory noise limits require a sound-level meter. RideLens never saves or uploads the audio. Monitoring stops when you leave the cockpit or background the app.
+
+Open **Live → Road conditions → Track air quality** to view local US AQI, PM₂.₅, PM₁₀, nitrogen dioxide, and ozone. Readings are hourly Open-Meteo/CAMS estimates based on rounded coordinates and refresh as you ride. A recent reading for the capture area is included in the evidence report.
 
 ### Ride reports
 
@@ -92,8 +94,6 @@ What is verified, and what isn't:
 - **Adapters**: TuneECU documents that Triumph *reprogramming* over Bluetooth requires specific adapters (OBDLink LX/MX/MX+) ([TuneECU PDF](https://tuneecu.net/TuneECU_Android/Basics_Android_Version.pdf)). RideLens only *reads* data, but those OBDLink units are Classic Bluetooth. For this app, pick a **BLE** adapter (e.g. OBDLink CX).
 
 ## Wrong-side reporter
-
-Open **Wrong-side → Track air quality** to view local US AQI, PM₂.₅, PM₁₀, nitrogen dioxide, and ozone. Readings are hourly Open-Meteo/CAMS estimates based on rounded coordinates and refresh as you ride. A recent reading for the capture area is included in the evidence report.
 
 Start the rear camera before riding and use **Capture wrong-side vehicle**, the camera shortcut, or a Bluetooth remote to save a burst. RideLens saves the original frames around the trigger, selects a sharp preview, and records the timestamp and available GPS fix and accuracy. On-device analysis suggests a vehicle category, highlights a frame with a possible rider, and attempts to read Indian registration plates. Open the saved report to compare the suggested frames and confirm the vehicle and plate. Models download on first use. Camera quality, distance, lighting, and motion affect which details are readable. Capture and local storage work when analysis is unavailable. JSON export includes the full photo burst and analysis metadata.
 

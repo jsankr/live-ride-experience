@@ -28,7 +28,8 @@ export function setupEvidenceLocation(getRideFix) {
       reading = { ...data, cell };
       status.textContent = `${airCategory(data.us_aqi)} · Estimate for ${new Date(data.time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
       const rows = [['US AQI', data.us_aqi], ['PM₂.₅', data.pm2_5], ['PM₁₀', data.pm10], ['NO₂', data.nitrogen_dioxide], ['Ozone', data.ozone]];
-      stats.innerHTML = rows.map(([label, value], i) => `<span><b>${value == null ? '—' : Math.round(value)}</b>${label}${i ? ' µg/m³' : ''}</span>`).join('');
+      stats.innerHTML = rows.map(([label, value]) => `<span>${label} <b>${value == null ? '—' : Math.round(value)}</b></span>`).join('')
+        + '<span aria-label="Pollutant concentrations in micrograms per cubic metre">µg/m³</span>';
       stats.hidden = false;
     } catch {
       if (request === controller) status.textContent = reading ? 'Update unavailable. Showing the last estimate.' : 'Air quality unavailable. Retrying when online.';
@@ -73,7 +74,7 @@ export function setupEvidenceLocation(getRideFix) {
       request = null;
       reading = null;
       stats.hidden = true;
-      status.textContent = 'Hourly estimate. Tracking shares approximate coordinates.';
+      status.textContent = 'Hourly estimate · uses approximate location';
     }
     updateWatch();
   });

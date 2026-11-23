@@ -109,6 +109,17 @@ function Route({ track, onDetails }) {
   </section>;
 }
 
+// The shared location controller updates the readings used by evidence reports.
+const AirQuality = React.memo(function AirQuality() {
+  return <section className="cockpit-air" aria-labelledby="airHeading">
+    <div className="panel-heading">
+      <div><h2 id="airHeading">Air pollution</h2><p id="airStatus" role="status">Hourly estimate · uses approximate location</p></div>
+      <button className="cockpit-control" id="airToggle" aria-pressed="false">Track air quality</button>
+    </div>
+    <div className="air-readings" id="airStats" hidden />
+  </section>;
+});
+
 function Weather({ weather, imperial }) {
   const { data, status, message } = weather;
   const busy = status === 'loading' || status === 'locating';
@@ -133,9 +144,10 @@ function Weather({ weather, imperial }) {
       <Metric kind="wind" label="Wind" value={weatherWind} unit={speedUnit} detail={data ? `${windDirection(data.wind_direction_10m)} · Gusts ${gust} ${speedUnit}` : 'At 10 m above ground'} />
     </div>
     <div className="weather-attribution">
-      <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a>
+      <a href="https://open-meteo.com/en/docs/air-quality-api" target="_blank" rel="noreferrer">Open-Meteo / CAMS</a>
       {status !== 'idle' && <button className="cockpit-link" onClick={weather.clear}>Clear weather</button>}
     </div>
+    <AirQuality />
   </section>;
 }
 

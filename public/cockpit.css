@@ -134,6 +134,9 @@ main { padding: 18px 16px 12px; }
 .condition-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 10px; }
 .condition-grid .glass { border-radius: 12px; background: var(--surface-1); box-shadow: none; }
 .condition-grid .metric-value { font-size: clamp(1.35rem, 2.7vw, 1.85rem); }
+.cockpit-air { border-top: 1px solid var(--glass-edge); padding-top: 4px; }
+.air-readings { display: flex; flex-wrap: wrap; gap: 3px 10px; color: var(--text-secondary); font-size: .7rem; margin-top: 4px; }
+.air-readings b { color: var(--text-primary); }
 .route-stage {
   display: grid;
   place-items: center;
@@ -190,12 +193,16 @@ main { padding: 18px 16px 12px; }
     overflow: hidden;
   }
 }
+@media (min-width: 850px) {
+  .condition-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
 @media (max-width: 700px) {
-  main { padding: 11px 9px 4px; }
-  .cockpit { gap: 8px; }
+  main { padding: 8px 9px 4px; }
+  .cockpit { gap: 7px; }
+  .air-readings { gap: 2px 6px; font-size: .65rem; }
   .brand { font-size: .83rem; gap: 3px; }
   .brand svg { width: 21px; height: 21px; }
-  .cockpit-panels { gap: 7px; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "route route" "weather weather" "trend noise"; }
+  .cockpit-panels { gap: 5px; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "route route" "weather weather" "trend noise"; }
   .ride-metrics { gap: 5px; }
   .glass { border-radius: 12px; }
   .ride-metrics .cockpit-metric { padding: 6px; }
@@ -211,11 +218,12 @@ main { padding: 18px 16px 12px; }
   .weather-attribution, .weather-attribution a, .weather-attribution .cockpit-link { min-height: 24px; }
   .route-controls { gap: 6px; }
   .route-controls .cockpit-link { max-width: 46px; padding: 0; min-height: 44px; }
-  .route-stage { min-height: 69px; }
-  .route-plane { height: 69px; width: min(78%, 350px); background-size: 12px 12px, 12px 12px, auto; }
-  .cockpit-trend .panel-heading, .cockpit-noise .panel-heading { align-items: flex-start; flex-wrap: wrap; row-gap: 3px; }
-  .cockpit-plot { height: 33px; }
-  .cockpit-noise .cockpit-plot { height: 24px; }
+  .route-stage { min-height: 52px; }
+  .route-plane { height: 52px; } width: min(78%, 350px); background-size: 12px 12px, 12px 12px, auto; }
+  .cockpit-trend .panel-heading, .cockpit-noise .panel-heading { align-items: flex-start; gap: 4px; }
+  .trend-controls .cockpit-control { padding-inline: 4px; }
+  .cockpit-plot { height: 32px; }
+  .cockpit-noise .cockpit-plot { height: 24px; margin-block: 3px; }
   .cockpit-control { padding-inline: 7px; }
   .cockpit p { font-size: .68rem; }
   .fab { --fab-size: 42px; right: 8px; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 4px); }
