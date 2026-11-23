@@ -2,13 +2,43 @@
 
 A phone-first PWA (Progressive Web App) that captures every ride live and turns it into a coaching-grade report: potholes, bumps, road roughness, braking, acceleration, jerk, lean angle, g-force, altitude, gear and clutch timing, and engine temperatures. It also includes a **wrong-side vehicle reporter**, which captures photos, plate, location and time into a database.
 
+## Screenshots
+
+> **All readings below are simulated.** The app has no demo mode, so these were made by `scripts/screenshots.mjs`. It streams `test/simulator.js` (phone IMU, GPS and an OBD-II ECU) through the app's real sensor-fusion and event-detection code. The wrong-side "photos" are drawn placeholders stamped *SAMPLE IMAGE*. The simulator is deliberately rough (many potholes and hard brakes), so its ride scores are lower than a typical ride's. Regenerate with `node scripts/screenshots.mjs` (needs Playwright + Chromium).
+
+<p align="center"><img src="docs/screenshots/overview-phone.png" alt="Phone: live dark, live light, ride history, wrong-side report" width="100%"></p>
+
+### Live cockpit
+Speed with an rpm arc, gear and clutch from OBD; lean angle and the G-G friction circle from gyro and GPS; coolant, throttle, altitude, distance, road comfort (ISO 2631 bands) and a live ride score; 30-second strip charts for road shock, braking/acceleration and rpm; an event feed and a live map.
+
+| Desktop · dark | Desktop · light |
+|---|---|
+| <img src="docs/screenshots/live-desktop-dark.png" alt="Live view, desktop, dark"> | <img src="docs/screenshots/live-desktop-light.png" alt="Live view, desktop, light"> |
+
+| Phone · dark | Phone · light | Phone · full page |
+|---|---|---|
+| <img src="docs/screenshots/live-phone-dark.png" alt="Live view, phone, dark" width="260"> | <img src="docs/screenshots/live-phone-light.png" alt="Live view, phone, light" width="260"> | <img src="docs/screenshots/live-phone-dark-full.png" alt="Live view, phone, full page" width="260"> |
+
+### Ride report
+Heuristic score and summary stats, insights, a route map coloured by road comfort with every event pinned, then speed, braking, roughness, elevation, lean, rpm and clutch-time charts, event breakdown, learned gear ratios and the full event log. Exports to JSON, CSV and GPX.
+
+| Desktop | Phone |
+|---|---|
+| <img src="docs/screenshots/report-desktop-dark.png" alt="Ride report, desktop"> | <img src="docs/screenshots/report-phone-dark.png" alt="Ride report, phone" width="300"> |
+
+### History, wrong-side reporter, setup
+| Ride history | Wrong-side reports | Report sheet | Setup |
+|---|---|---|---|
+| <img src="docs/screenshots/history-phone-dark.png" alt="Ride history" width="200"> | <img src="docs/screenshots/wrongside-phone-dark.png" alt="Wrong-side reports" width="200"> | <img src="docs/screenshots/wrongside-report-sheet.png" alt="Wrong-side report sheet" width="200"> | <img src="docs/screenshots/setup-phone-dark.png" alt="Setup" width="200"> |
+
 ## Run it on your phone (no laptop)
 RideLens runs entirely in the phone's browser. Rides and reports are stored on the phone (IndexedDB) and it keeps working offline once loaded.
 
 1. **Host it once over HTTPS** (phones only allow sensors, camera and Bluetooth on HTTPS pages). `.github/workflows/pages.yml` publishes `public/` to GitHub Pages on every push to `main`:
    - Repo **Settings → Pages → Build and deployment → Source: GitHub Actions**.
    - GitHub Pages on a *private* repo requires a paid GitHub plan; on the free plan the repo must be public. Your ride data is never in the repo.
-   - Your URL: `https://<user>.github.io/live-ride-experience-/`
+   - Your URL: `https://<user>.github.io/live-ride-experience/` (this repo: **https://jsankr.github.io/live-ride-experience/**)
+   - **Seeing this README instead of the app?** Pages is still set to *Deploy from a branch*, which renders the repo root with Jekyll. Switch the Source to *GitHub Actions* and re-run **Actions → Test and publish**. Until then, the root `index.html` redirects to `public/`, so the app still opens.
 2. Open the URL on the phone → **Setup** → *Grant motion, location & camera*. The *This phone & browser* card shows what works on that exact device.
 3. Optional: add to home screen (Chrome: ⋮ → *Add to Home screen*; Safari: Share → *Add to Home Screen*).
 4. Mount the phone, tap **Start ride**, keep the screen on and RideLens in front.
@@ -86,6 +116,7 @@ public/            PWA (vanilla ES modules, no build step)
   js/charts.js     canvas strip charts, friction circle, SVG report charts
   js/app.js        UI
 server/server.mjs  static + REST + SQLite + Wi-Fi OBD bridge
+scripts/screenshots.mjs  regenerates docs/screenshots/ from the simulator (dev only)
 test/              node:test suites + simulator.js (test-only ground truth)
 ```
 
