@@ -1,49 +1,57 @@
 :root {
-  --page: #080f20;
-  --surface-1: #101b31;
-  --surface-2: #16243d;
-  --surface-3: #1a2a46;
-  --glass: #111c32e8;
-  --glass-edge: #9ab7eb2b;
-  --text-primary: #edf4ff;
-  --text-secondary: #cad8f1;
-  --text-muted: #a0b3d4;
-  --accent-text: #80ede8;
-  --accent-fill: #247e87;
-  --series-1: #69dadb;
-  --cockpit-aqua: #72f2e4;
+  --page: #0b1410;
+  --checker: #a8d0980a;
+  --surface-1: #14231a;
+  --surface-2: #1e3224;
+  --surface-3: #29412d;
+  --glass: #13241ae8;
+  --glass-edge: #aece9c30;
+  --text-primary: #f0f8e9;
+  --text-secondary: #d3e2cd;
+  --text-muted: #acc4ac;
+  --accent-text: #c4ef9a;
+  --accent-fill: #356449;
+  --series-1: #a9e576;
+  --cockpit-aqua: #b9ed78;
   --cockpit-violet: #c2a8ff;
   --cockpit-blue: #93baff;
   --cockpit-amber: #ffd28a;
   --cockpit-focus: #ffe3a1;
-  --cockpit-ambient: #264d803d;
-  --panel-top: #192944d9;
-  --panel-bottom: #111b30f2;
+  --cockpit-ambient: #426e333d;
+  --panel-top: #203426ee;
+  --panel-bottom: #13221bed;
 }
 :root[data-theme="light"] {
-  --cockpit-aqua: #006e6b;
+  --page: #e9f3e3;
+  --checker: #4c7d2210;
+  --cockpit-aqua: #2b691f;
   --cockpit-violet: #673cbc;
   --cockpit-blue: #245bac;
   --cockpit-amber: #775008;
-  --cockpit-focus: #07448b;
-  --cockpit-ambient: #b4d0fb8c;
-  --panel-top: #fcfdffe8;
-  --panel-bottom: #e7effbf5;
+  --cockpit-focus: #315e22;
+  --cockpit-ambient: #bbd6a781;
+  --panel-top: #f8fdf4ec;
+  --panel-bottom: #e4f0def5;
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]):not([data-theme="light"]) {
-    --cockpit-aqua: #006e6b;
+    --page: #e9f3e3;
+    --checker: #4c7d2210;
+    --cockpit-aqua: #2b691f;
     --cockpit-violet: #673cbc;
     --cockpit-blue: #245bac;
     --cockpit-amber: #775008;
-    --cockpit-focus: #07448b;
-    --cockpit-ambient: #b4d0fb8c;
-    --panel-top: #fcfdffe8;
-    --panel-bottom: #e7effbf5;
+    --cockpit-focus: #315e22;
+    --cockpit-ambient: #bbd6a781;
+    --panel-top: #f8fdf4ec;
+    --panel-bottom: #e4f0def5;
   }
 }
 body {
-  background: radial-gradient(ellipse at 70% 0, var(--cockpit-ambient), transparent 53%), var(--page);
+  background:
+    radial-gradient(ellipse at 72% 0, var(--cockpit-ambient), transparent 56%),
+    repeating-conic-gradient(from 90deg, var(--checker) 0 25%, transparent 0 50%) 0 0 / 44px 44px,
+    var(--page);
   min-height: 100vh;
 }
 [hidden] { display: none !important; }
@@ -83,7 +91,7 @@ main { padding: 18px 16px 12px; }
 .cockpit-control[aria-pressed=true] { color: var(--cockpit-aqua); border-color: currentColor; }
 .cockpit-control:hover:not(:disabled), .cockpit-link:hover { color: var(--cockpit-aqua); }
 .cockpit-control:disabled { opacity: .7; }
-.ride-metrics, .condition-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
+.condition-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
 .cockpit-metric { min-width: 0; padding: 11px 12px; }
 .metric-title {
   font-size: .77rem;
@@ -145,23 +153,23 @@ main { padding: 18px 16px 12px; }
   min-height: 176px;
   overflow: hidden;
   margin: 2px 0;
-  background: radial-gradient(ellipse at 52% 58%, #2167873a, transparent 70%);
+  background: radial-gradient(ellipse at 52% 58%, #437e3b52, transparent 70%);
 }
 .route-plane {
   width: min(90%, 390px);
   height: 158px;
   position: relative;
-  background-color: #10253d;
-  background-image: linear-gradient(#8fb9f429 1px, transparent 1px), linear-gradient(90deg, #8fb9f429 1px, transparent 1px), radial-gradient(ellipse at 55% 58%, #225364, #122039 75%);
+  background-color: #152f23;
+  background-image: linear-gradient(#a6d09930 1px, transparent 1px), linear-gradient(90deg, #a6d09930 1px, transparent 1px), radial-gradient(ellipse at 55% 58%, #29492c, #142820 75%);
   background-size: 18px 18px, 18px 18px, auto;
-  box-shadow: 0 12px 24px #0007, inset 0 0 28px #409da029;
-  border: 1px solid #67c9e287;
+  box-shadow: 0 12px 24px #0007, inset 0 0 28px #59905235;
+  border: 1px solid #9bd28a90;
   border-radius: 12px;
   transition: transform .22s ease, box-shadow .22s ease;
 }
 .route-angled .route-plane {
   transform: rotateX(48deg) rotateZ(-13deg);
-  box-shadow: 0 3px #3c8a9e, 0 7px #205269, 0 11px #163449, 0 28px 18px #0007, inset 0 0 28px #409da029;
+  box-shadow: 0 3px #4f7d48, 0 7px #31583b, 0 11px #233e2f, 0 28px 18px #0007, inset 0 0 28px #59905235;
 }
 .route-plane canvas { width: 100%; height: 100%; display: block; }
 .route-controls { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
@@ -205,8 +213,6 @@ main { padding: 18px 16px 12px; }
   .cockpit-panels { gap: 5px; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "route route" "weather weather" "trend noise"; }
   .ride-metrics { gap: 5px; }
   .glass { border-radius: 12px; }
-  .ride-metrics .cockpit-metric { padding: 6px; }
-  .ride-metrics .metric-title span { display: none; }
   .metric-title { font-size: .69rem; }
   .metric-title span { width: 18px; height: 18px; flex-basis: 18px; }
   .metric-caption { font-size: .64rem; }
@@ -284,4 +290,131 @@ main { padding: 18px 16px 12px; }
   pointer-events: none;
   border: 2px solid #ffe086;
   background: #ffe08626;
+}
+
+.ride-metrics {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, .84fr);
+  gap: 9px;
+}
+.gauge-card {
+  min-width: 0;
+  padding: 8px 12px;
+  display: flex;
+  gap: 6px;
+  justify-content: space-between;
+  align-items: center;
+  --gauge-ink: var(--cockpit-aqua);
+  --gauge-track: var(--glass-edge);
+}
+.gauge-card[data-tone="danger"] { --gauge-ink: var(--reading-danger); border-color: var(--reading-danger); }
+.gauge-copy { min-width: 0; }
+.gauge-copy h2 { font-size: .86rem; }
+.gauge-reading {
+  font-family: var(--font-display);
+  color: var(--gauge-ink);
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(1.4rem, 3vw, 2.35rem);
+  font-weight: 800;
+  line-height: 1.08;
+  white-space: nowrap;
+}
+.gauge-reading small, .ride-summary small {
+  font: 600 .65rem var(--font-sans);
+  color: var(--text-muted);
+}
+.gauge-copy p { font-size: .65rem; }
+.gauge-card[data-tone="danger"] p { color: var(--reading-danger); }
+.speed-instrument { width: clamp(52px, 8vw, 96px); flex: 0 1 auto; }
+.speed-bezel {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  isolation: isolate;
+}
+.speed-bezel::before, .speed-bezel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+.speed-bezel::before {
+  background: conic-gradient(from 234deg, var(--gauge-ink) 0 var(--gauge-angle), var(--gauge-track) var(--gauge-angle) 252deg, transparent 252deg);
+  mask-image: radial-gradient(farthest-side, transparent calc(100% - 5px), black calc(100% - 4px));
+}
+.speed-bezel::after {
+  inset: 7px;
+  background: repeating-conic-gradient(from 234deg, var(--gauge-track) 0 3deg, transparent 3deg 18deg);
+  mask-image: radial-gradient(farthest-side, transparent calc(100% - 3px), black calc(100% - 2px));
+}
+.speed-needle {
+  position: absolute;
+  inset: 11%;
+  transform: rotate(calc(234deg + var(--gauge-angle)));
+}
+.speed-needle::before {
+  content: "";
+  position: absolute;
+  width: 2px;
+  height: 48%;
+  top: 2%;
+  left: calc(50% - 1px);
+  border-radius: 2px;
+  background: var(--gauge-ink);
+}
+.speed-needle::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  left: calc(50% - 3px);
+  top: calc(50% - 3px);
+  width: 6px;
+  height: 6px;
+  background: var(--gauge-ink);
+}
+.gauge-scale { position: relative; margin-top: -16%; display: flex; justify-content: space-between; }
+.gauge-scale, .thermo-scale { font-size: .59rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.thermo-instrument { width: 42px; height: clamp(51px, 7vw, 84px); flex: none; position: relative; }
+.thermo-tube {
+  position: absolute;
+  top: 0; bottom: 8px; left: 6px;
+  width: 12px;
+  padding: 2px;
+  display: flex;
+  align-items: end;
+  border: 1px solid var(--gauge-track);
+  border-radius: 8px;
+}
+.thermo-tube i { width: 100%; height: var(--gauge-level); background: var(--gauge-ink); border-radius: 5px; }
+.thermo-bulb {
+  position: absolute;
+  left: 4px; bottom: 0;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1px solid var(--gauge-track);
+}
+.thermo-instrument[data-filled="true"] .thermo-bulb { background: var(--gauge-ink); }
+.thermo-scale { position: absolute; inset: 0 0 7px 22px; display: flex; flex-direction: column; justify-content: space-between; }
+.ride-summary { margin: 0; padding: 6px 9px; display: grid; align-content: center; gap: 3px; min-width: 0; }
+.ride-summary div { display: flex; justify-content: space-between; gap: 4px; align-items: baseline; }
+.ride-summary dt { color: var(--text-muted); font-size: .72rem; }
+.ride-summary dd { margin: 0; color: var(--reading-tone, var(--text-primary)); font-variant-numeric: tabular-nums; font-size: .8rem; font-weight: 750; white-space: nowrap; }
+@media (max-width: 700px) {
+  .ride-metrics { grid-template-columns: minmax(0, 1.05fr) minmax(0, .86fr) minmax(0, 1fr); }
+  .gauge-card { padding: 5px; gap: 2px; }
+  .gauge-copy h2 { font-size: .72rem; }
+  .gauge-reading { font-size: 1.4rem; }
+  .gauge-reading small, .gauge-copy p { font-size: .58rem; }
+  .speed-instrument { width: clamp(33px, 11vw, 57px); }
+  .speed-bezel::before { mask-image: radial-gradient(farthest-side, transparent calc(100% - 4px), black calc(100% - 3px)); }
+  .speed-bezel::after { inset: 5px; }
+  .gauge-scale, .thermo-scale { font-size: .49rem; }
+  .thermo-instrument { width: 30px; height: 46px; }
+  .thermo-tube { width: 9px; left: 2px; bottom: 6px; }
+  .thermo-bulb { width: 12px; height: 12px; left: 1px; }
+  .thermo-scale { inset: 0 0 5px 14px; }
+  .ride-summary { padding: 3px 5px; gap: 2px; }
+  .ride-summary dt, .ride-summary small { font-size: .56rem; }
+  .ride-summary dd { font-size: .68rem; }
 }

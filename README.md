@@ -6,11 +6,11 @@ A phone-first PWA (Progressive Web App) that captures every ride live and turns 
 
 [Open RideLens on GitHub Pages](https://jsankr.github.io/live-ride-experience/)
 
-The React cockpit puts speed, distance, lean, ride score, weather, a route preview, and sound levels in one compact view. Toggle between flat and angled views of the recorded GPS trace, or open **Route map** for the interactive street map. The telemetry chart switches between speed and road shock. **Ride details** opens the OBD gauges, G-force, braking charts, and event feed.
+The green cockpit displays a live speedometer, OBD coolant thermometer, distance, lean, ride score, weather, a route preview, and sound levels in one compact view. The speedometer follows the selected metric or imperial units. Fresh OBD data supplies coolant and RPM, and the thermometer highlights the app’s existing overheat threshold. Toggle between flat and angled views of the recorded GPS trace, or open **Route map** for the interactive street map. The telemetry chart switches between speed and road shock. **Ride details** opens the OBD gauges, G-force, braking charts, and event feed.
 
 | Desktop cockpit | Phone cockpit |
 | --- | --- |
-| <img src="docs/screenshots/cockpit-desktop.png" alt="Desktop RideLens grid showing a GPS route, four weather readings and two live charts" width="720"> | <img src="docs/screenshots/cockpit-phone.png" alt="Phone RideLens cockpit with readings and charts above the navigation" width="280"> |
+| <img src="docs/screenshots/cockpit-desktop.png" alt="Green desktop RideLens cockpit with a speedometer, coolant thermometer, GPS route, and telemetry charts" width="720"> | <img src="docs/screenshots/cockpit-phone.png" alt="Green phone cockpit with speed and coolant gauges, readings, and charts above the navigation" width="280"> |
 
 Screenshots use the ride simulator, fixed weather and air-quality responses, and Chromium’s test microphone. The app reads your device and forecast provider in normal use.
 

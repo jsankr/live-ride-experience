@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { CoolantThermometer, Speedometer } from './RideGauges.jsx';
 import { useNoise, useWeather } from './useConditions.js';
 import { meterStatus, roadStatuses, weatherLabel, windDirection } from './conditions.js';
 
@@ -90,10 +91,10 @@ function Route({ track, onDetails }) {
     ctx.beginPath();
     points.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
     ctx.lineWidth = 5; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    ctx.strokeStyle = '#69fff3'; ctx.shadowColor = '#21cddf'; ctx.shadowBlur = 12; ctx.stroke();
+    ctx.strokeStyle = '#c4f585'; ctx.shadowColor = '#8be566'; ctx.shadowBlur = 12; ctx.stroke();
     const [x, y] = points.at(-1);
     ctx.beginPath(); ctx.arc(x, y, 8, 0, 2 * Math.PI);
-    ctx.fillStyle = '#f2ffff'; ctx.fill();
+    ctx.fillStyle = '#f2ffda'; ctx.fill();
   }, [track]);
   return <section className="cockpit-route glass" aria-label="Ride route">
     <div className="panel-heading">
@@ -205,7 +206,7 @@ export function Cockpit() {
     : score >= 50 ? { tone: 'caution', label: 'Fair score' } : { tone: 'danger', label: 'Low score' };
   const elapsed = Math.max(0, Math.floor((snap?.elapsedMs ?? 0) / 1000));
   const elapsedLabel = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, '0')}`;
-  const speed = snap?.speedSrc && snap.speedSrc !== 'none' ? number(snap.speedKmh * distanceFactor) : '—';
+  const speed = snap?.speedSrc && snap.speedSrc !== 'none' ? snap.speedKmh * distanceFactor : null;
 
   function toggleDetails(open, focusMap = false) {
     const panel = document.getElementById('rideDetails');
@@ -227,10 +228,14 @@ export function Cockpit() {
       <button className="cockpit-control detail-toggle" aria-controls="rideDetails" aria-expanded={details} onClick={() => toggleDetails(!details)}>{details ? 'Hide ride details' : 'Ride details'}</button>
     </div>
     <div className="ride-metrics">
-      <Metric kind="speed" label="Speed" value={speed} unit={speedUnit} detail={speed !== '—' ? snap.speedSrc.toUpperCase() : 'GPS or OBD'} />
-      <Metric kind="route" label="Distance" value={snap?.fix ? number(snap.distanceKm * distanceFactor, 1) : '—'} unit={distanceUnit} detail="GPS track" />
-      <Metric kind="visibility" label="Lean" value={snap?.t && recording ? number(Math.abs(snap.lean)) : '—'} unit="°" detail={snap?.lean > 1 ? 'Right' : snap?.lean < -1 ? 'Left' : 'Phone motion'} />
-      <Metric kind="weather" label="Ride score" value={number(score)} unit="/100" detail="Ride analysis" status={scoreStatus} />
+      <Speedometer speed={speed} unit={speedUnit} imperial={imperial}
+        source={speed == null ? null : snap.speedSrc.toUpperCase()} rpm={snap?.obd.fresh ? snap.obd.rpm : null} />
+      <CoolantThermometer coolant={snap?.obd.coolant} imperial={imperial} obdFresh={snap?.obd.fresh} />
+      <dl className="glass ride-summary">
+        <div><dt>Distance</dt><dd>{snap?.fix ? number(snap.distanceKm * distanceFactor, 1) : '—'} <small>{distanceUnit}</small></dd></div>
+        <div><dt>Lean</dt><dd>{snap?.t && recording ? number(Math.abs(snap.lean)) : '—'}°{snap?.lean > 1 ? ' R' : snap?.lean < -1 ? ' L' : ''}</dd></div>
+        <div data-tone={scoreStatus?.tone}><dt>Ride score</dt><dd title={scoreStatus?.label}>{number(score)}<small>/100</small></dd></div>
+      </dl>
     </div>
     <div className="cockpit-panels">
       <Route track={ride.route} onDetails={() => toggleDetails(true, true)} />

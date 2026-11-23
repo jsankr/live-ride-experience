@@ -101,6 +101,8 @@ try {
   await page.goto(base);
   await page.waitForFunction(() => !!window.rideHarness);
   assert.equal(requests, 0);
+  await page.getByRole('article', { name: 'Coolant thermometer' }).getByText('Needs OBD').waitFor();
+  assert.match(await page.locator('body').evaluate((element) => getComputedStyle(element).backgroundImage), /repeating-conic-gradient/);
   await page.getByRole('button', { name: 'Get weather' }).click();
   await page.getByText('Forecast unavailable.', { exact: false }).waitFor();
   await page.getByRole('button', { name: 'Get weather' }).click();
@@ -140,6 +142,8 @@ try {
   await page.waitForTimeout(2500); // five half-second microphone samples
   for (const [width, height] of [[320, 700], [375, 812], [390, 844], [768, 1024], [1024, 768], [1440, 900], [844, 390]]) {
     await page.setViewportSize({ width, height });
+    await page.evaluate(() => window.rideHarness.feedObd(Date.now(), { speed: 54, rpm: 2875, coolant: 87 }));
+    await page.getByRole('article', { name: 'Coolant thermometer' }).getByText('87 °C').waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `horizontal overflow at ${width} × ${height}`);
     if (height >= 812) {
       const bottom = await page.locator('.cockpit').evaluate((element) => element.getBoundingClientRect().bottom);
@@ -165,6 +169,12 @@ try {
   await page.getByRole('navigation', { name: 'RideLens' }).getByRole('button', { name: 'Live' }).click();
   await page.getByRole('button', { name: 'Enable mic' }).waitFor();
   await page.getByText('SW · Gusts 17 mph').waitFor();
+  await page.evaluate(() => window.rideHarness.feedObd(Date.now(), { speed: 54, rpm: 2875, coolant: 108 }));
+  const thermometer = page.getByRole('article', { name: 'Coolant thermometer' });
+  await thermometer.getByText('226 °F').waitFor();
+  await thermometer.getByText('Overheat · OBD').waitFor();
+  assert.equal(await thermometer.getAttribute('data-tone'), 'danger');
+  await page.getByRole('article', { name: 'Speedometer' }).getByText('mph').waitFor();
   await page.getByRole('button', { name: 'Clear weather' }).click();
   await page.getByText('Location needed').waitFor();
   await page.locator('#recBtn').click();
