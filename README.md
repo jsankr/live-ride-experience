@@ -2,42 +2,29 @@
 
 A phone-first PWA (Progressive Web App) that captures every ride live and turns it into a coaching-grade report: potholes, bumps, road roughness, braking, acceleration, jerk, lean angle, g-force, altitude, gear and clutch timing, and engine temperatures. It also includes a **wrong-side vehicle reporter**, which captures photos, plate, location and time into a database.
 
-## Screenshots
+## Live dashboard
 
-> **All readings below are simulated.** The app has no demo mode, so these were made by `scripts/screenshots.mjs`. It streams `test/simulator.js` (phone IMU, GPS and an OBD-II ECU) through the app's real sensor-fusion and event-detection code. The wrong-side "photos" are drawn placeholders stamped *SAMPLE IMAGE*. The simulator is deliberately rough (many potholes and hard brakes), so its ride scores are lower than a typical ride's. Regenerate with `node scripts/screenshots.mjs` (needs Playwright + Chromium).
+[Open RideLens on GitHub Pages](https://jsankr.github.io/live-ride-experience/)
 
-<p align="center"><img src="docs/screenshots/overview-phone.png" alt="Phone: live with OBD (dark, light), live phone-only, ride history, wrong-side report" width="100%"></p>
+The React cockpit puts speed, distance, lean, ride score, weather, a route preview, and sound levels in one compact view. Toggle between flat and angled views of the recorded GPS trace, or open **Route map** for the interactive street map. The telemetry chart switches between speed and road shock. **Ride details** opens the OBD gauges, G-force, braking charts, and event feed.
 
-### Live cockpit
-Speed with an rpm arc, gear and clutch from OBD; lean angle and the G-G friction circle from gyro and GPS; coolant, throttle, altitude, distance, road comfort (ISO 2631 bands) and a live ride score; 30-second strip charts for road shock, braking/acceleration and rpm; an event feed and a live map.
+| Desktop cockpit | Phone cockpit |
+| --- | --- |
+| <img src="docs/screenshots/cockpit-desktop.png" alt="Desktop RideLens grid showing a GPS route, four weather readings and two live charts" width="720"> | <img src="docs/screenshots/cockpit-phone.png" alt="Phone RideLens cockpit with readings and charts above the navigation" width="280"> |
 
-| Desktop · dark | Desktop · light |
-|---|---|
-| <img src="docs/screenshots/live-desktop-dark.png" alt="Live view, desktop, dark"> | <img src="docs/screenshots/live-desktop-light.png" alt="Live view, desktop, light"> |
+Screenshots use the ride simulator, a fixed weather response, and Chromium’s test microphone. The app reads your device and forecast provider in normal use.
 
-Every tile is labelled with where its number comes from: **Phone** (GPS/IMU), **OBD** (the bike's ECU) or **Fused**. Without an adapter, the engine tiles say *Needs OBD* instead of showing zeros.
+### Weather and sound
 
-| Phone · dark | Phone · light | Phone only (no OBD) | Phone · full page |
-|---|---|---|---|
-| <img src="docs/screenshots/live-phone-dark.png" alt="Live view, phone, dark" width="220"> | <img src="docs/screenshots/live-phone-light.png" alt="Live view, phone, light" width="220"> | <img src="docs/screenshots/live-phone-no-obd.png" alt="Live view, phone sensors only" width="220"> | <img src="docs/screenshots/live-phone-dark-full.png" alt="Live view, phone, full page" width="220"> |
+- **Get weather** requests local conditions from [Open-Meteo](https://open-meteo.com/) using coordinates rounded to two decimal places. It shows current temperature, weather status, precipitation, wind direction and gusts, plus hourly rain probability and visibility. Once enabled, it refreshes during a ride while the cockpit is visible. **Clear weather** clears the forecast and stops automatic requests.
+- **Enable mic** tracks the current and peak relative sound levels and a 30-second trend. Readings are in dBFS, relative to the microphone’s recording range. Wind, mounting, and device gain affect the readings. Calibrated dB SPL/dBA and regulatory noise limits require a sound-level meter. RideLens never saves or uploads the audio. Monitoring stops when you leave the cockpit or background the app.
 
-### Ride report
-Heuristic score and summary stats, insights, a route map coloured by road comfort with events clustered into numbered bubbles (tap to zoom in), then speed, braking, roughness, elevation, lean, rpm and clutch-time charts. On long rides the charts plot the average with a band for the min–max range, and events appear as ticks under the time axis, event breakdown, learned gear ratios and the full event log. Exports to JSON, CSV and GPX.
+### Ride reports
 
-| Desktop | Phone |
-|---|---|
-| <img src="docs/screenshots/report-desktop-dark.png" alt="Ride report, desktop"> | <img src="docs/screenshots/report-phone-dark.png" alt="Ride report, phone" width="300"> |
-
-### History, wrong-side reporter, setup
-| Ride history | Wrong-side reports | Report sheet | Setup |
-|---|---|---|---|
-| <img src="docs/screenshots/history-phone-dark.png" alt="Ride history" width="200"> | <img src="docs/screenshots/wrongside-phone-dark.png" alt="Wrong-side reports" width="200"> | <img src="docs/screenshots/wrongside-report-sheet.png" alt="Wrong-side report sheet" width="200"> | <img src="docs/screenshots/setup-phone-dark.png" alt="Setup" width="200"> |
-
-## Design system
-The UI follows the **RideLens Cockpit** design system: role tokens for colour (dark first, plus a daylight theme), Barlow Semi Condensed for readouts, Inter for text and JetBrains Mono for plates and logs. All text meets 4.5:1 contrast in both themes. Tokens live at the top of `public/styles.css`. Web fonts are cached for offline use and fall back to the system font.
+Ride reports include a road-comfort map with clustered events, a heuristic score, speed, braking, roughness, elevation, lean, engine and clutch charts, and a full event log. Export JSON, CSV, or GPX. Saved rides and wrong-side reports are available from the bottom navigation.
 
 ## Run it on your phone (no laptop)
-RideLens runs entirely in the phone's browser. Rides and reports are stored on the phone (IndexedDB) and it keeps working offline once loaded.
+RideLens runs entirely in the phone's browser. Rides and reports are stored on the phone (IndexedDB) and the ride tools keep working offline once loaded. Weather updates and uncached basemap tiles need a network connection.
 
 1. **Host it once over HTTPS** (phones only allow sensors, camera and Bluetooth on HTTPS pages). `.github/workflows/pages.yml` publishes `public/` to GitHub Pages on every push to `main`:
    - Repo **Settings → Pages → Build and deployment → Source: GitHub Actions**.
@@ -57,15 +44,18 @@ RideLens runs entirely in the phone's browser. Rides and reports are stored on t
 
 These are browser-engine limits, not app limits. Engine data needs **Chrome on Android**. Every browser stops delivering sensor data when the screen is off or the app is in the background.
 
-The browser matrix above comes from published Web Bluetooth support; the app itself has been tested only in Chromium (including iPhone-size emulation), not on a physical phone or in Firefox/Safari engines.
+The browser matrix reflects published Web Bluetooth support. Automated browser checks run in Chromium, including phone-size viewports.
 
 ### Developer use (optional)
 ```
-npm start            # local server on http://localhost:8080 (Node ≥ 22.5), also the optional report DB + Wi-Fi OBD bridge
-npm test             # 21 tests: detectors vs simulator ground truth, OBD parser, server, Wi-Fi bridge
+npm ci
+npm start            # builds the React app, then starts the optional report DB and Wi-Fi OBD bridge on localhost:8080
+npm test             # detectors, OBD parser, report API, and Wi-Fi bridge
+npx playwright install chromium
+npm run test:browser
 ```
 
-**No synthetic data in the app.** Every number on screen comes from your phone's sensors or the bike's ECU. There is no demo or sample mode. The ride simulator lives in `test/` only and is used solely to score the detectors in automated tests.
+Use Node 22.5 or later. Run `npm run build` for the static production app in `public/`. To regenerate the dashboard screenshots after building, run `RIDELENS_SCREENSHOTS=docs/screenshots npm run test:browser`. Set `CHROMIUM_PATH` to use an existing Chromium executable.
 
 ## What gets measured, and from which sensor
 
@@ -114,14 +104,16 @@ What is verified, and what isn't:
 
 ## Layout
 ```
-public/            PWA (vanilla ES modules, no build step)
+src/               React app shell, ride dashboard, and weather and microphone hooks
+public/            Static PWA output, ride analytics modules, and offline service worker
   js/analytics.js  sensor-fusion + event detection (pure; runs in Node tests)
   js/obd.js        ELM327 driver (BLE + WebSocket transports)
   js/reports.js    evidence camera, plate validation/OCR, export, sync
   js/charts.js     canvas strip charts, friction circle, SVG report charts
   js/app.js        UI
 server/server.mjs  static + REST + SQLite + Wi-Fi OBD bridge
-scripts/screenshots.mjs  regenerates docs/screenshots/ from the simulator (dev only)
+scripts/build.mjs       generates the committed static bundle for GitHub Pages
+scripts/cockpit-browser.mjs  exercises the dashboard and captures the README screenshots
 test/              node:test suites + simulator.js (test-only ground truth)
 ```
 

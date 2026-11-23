@@ -1,0 +1,180 @@
+import React from 'react';
+import { Cockpit } from './Cockpit.jsx';
+
+export function Shell() {
+  return <>
+  <header className="topbar">
+    <div className="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M12 12 L17 7" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" /><circle cx="12" cy="12" r="2" fill="currentColor" /></svg>RideLens</div>
+    <div className="chips" id="chips">
+      <span className="chip" data-src="gps"><i></i>GPS</span>
+      <span className="chip" data-src="imu"><i></i>IMU</span>
+      <span className="chip" data-src="obd"><i></i>OBD</span>
+    </div>
+    <button id="recBtn" className="rec" aria-pressed="false"><span className="rec-dot"></span><span id="recLabel">Start ride</span></button>
+  </header>
+
+  <main id="main-content">
+
+    <section id="view-live" className="view active" aria-label="Live">
+      <div className="banner" id="banner" hidden></div>
+      <Cockpit />
+      <div className="grid live-grid" id="rideDetails" hidden>
+        <article className="card hero">
+          <svg className="dial" viewBox="0 0 220 220" aria-hidden="true">
+            <path id="rpmTrack" className="dial-track" />
+            <path id="rpmArc" className="dial-arc" />
+          </svg>
+          <div className="hero-center">
+            <div className="speed"><span id="speed">0</span><small>km/h</small></div>
+            <div className="sub"><span id="rpm">— rpm</span></div>
+          </div>
+          <div className="gear-box"><span className="label">Gear</span><span id="gear" className="gear">N</span><span id="clutch" className="clutch" hidden>CLUTCH</span></div>
+          <div className="speed-src" id="speedSrc">—</div>
+        </article>
+
+        <article className="card half">
+          <h3>Lean angle</h3>
+          <svg className="lean" viewBox="0 0 200 120" aria-hidden="true">
+            <path d="M20 100 A80 80 0 0 1 180 100" className="dial-track" />
+            <g id="leanBike" transform="rotate(0 100 100)">
+              <line x1="100" y1="100" x2="100" y2="28" className="lean-needle" />
+              <circle cx="100" cy="28" r="6" className="lean-head" />
+            </g>
+            <text x="22" y="116" className="tick">L</text><text x="172" y="116" className="tick">R</text>
+          </svg>
+          <div className="metric-row"><span className="big" id="lean">0°</span><span className="muted">max <b id="leanMaxL">0°</b>L · <b id="leanMaxR">0°</b>R</span></div>
+        </article>
+
+        <article className="card half">
+          <h3>G-force</h3>
+          <canvas id="gcircle" className="gcircle"></canvas>
+          <div className="metric-row"><span className="big" id="gNow">0.00 g</span><span className="muted">peak <b id="gPeak">0.00 g</b></span></div>
+        </article>
+
+        <div className="tiles">
+          <article className="tile" data-tile="coolant"><span className="tile-top"><span className="label">Coolant</span><span className="src obd" id="src-coolant">OBD</span></span><span className="val" id="coolant">—</span><span className="hint" id="coolantHint">engine temp</span></article>
+          <article className="tile" data-tile="throttle"><span className="tile-top"><span className="label">Throttle</span><span className="src obd" id="src-throttle">OBD</span></span><span className="val" id="throttle">—</span><span className="meter"><i id="throttleBar"></i></span></article>
+          <article className="tile" data-tile="alt"><span className="tile-top"><span className="label">Altitude</span><span className="src " id="src-alt">Phone</span></span><span className="val" id="alt">—</span><span className="hint" id="climb">↑0 ↓0 m</span></article>
+          <article className="tile" data-tile="dist"><span className="tile-top"><span className="label">Distance</span><span className="src " id="src-dist">Phone</span></span><span className="val" id="dist">0.0 km</span><span className="hint" id="elapsed">0:00</span></article>
+          <article className="tile" data-tile="rough"><span className="tile-top"><span className="label">Road</span><span className="src " id="src-rough">Phone</span></span><span className="val" id="rough">—</span><span className="status-pill" id="comfort">—</span></article>
+          <article className="tile" data-tile="score"><span className="tile-top"><span className="label">Ride score</span><span className="src fused" id="src-score">Fused</span></span><span className="val" id="score">—</span><span className="hint" id="scoreHint">smooth · brake · shift</span></article>
+        </div>
+
+        <article className="card wide">
+          <div className="card-head"><h3>Road shock</h3><span className="legend"><i style={{"background": "var(--series-1)"}}></i>m/s² <i className="dash" style={{"borderColor": "var(--status-serious)"}}></i>impact</span></div>
+          <canvas id="chartVert" className="strip"></canvas>
+        </article>
+        <article className="card wide">
+          <div className="card-head"><h3>Brake / accel</h3><span className="legend"><i style={{"background": "var(--series-2)"}}></i>g <i className="band"></i>hard</span></div>
+          <canvas id="chartLong" className="strip"></canvas>
+        </article>
+        <article className="card wide">
+          <div className="card-head"><h3>Engine &amp; clutch</h3><span className="legend"><i style={{"background": "var(--series-3)"}}></i>rpm <i className="dash" style={{"borderColor": "var(--status-warning)"}}></i>shift</span></div>
+          <canvas id="chartRpm" className="strip"></canvas>
+        </article>
+
+        <article className="card feed-card">
+          <div className="card-head"><h3>Events</h3><span className="muted" id="evCount">0</span></div>
+          <ol className="feed" id="feed"><li className="empty">Events appear here as you ride.</li></ol>
+        </article>
+        <article className="card map-card">
+          <div id="liveMap" className="map" tabIndex={-1} aria-label="Live route map"></div>
+        </article>
+      </div>
+    </section>
+
+    <section id="view-report" className="view" aria-label="Ride report">
+      <div id="reportBody"><p className="empty pad">Finish a ride, or open one from History, to see its report.</p></div>
+    </section>
+
+    <section id="view-history" className="view" aria-label="History">
+      <div className="section-head"><h2>Ride history</h2><button className="ghost" id="importBtn">Import JSON</button><input type="file" id="importFile" accept="application/json" hidden /></div>
+      <div id="historyList" className="list"></div>
+    </section>
+
+    <section id="view-wrongside" className="view" aria-label="Wrong-side reports">
+      <div className="grid ws-grid">
+        <article className="card cam-card">
+          <div className="card-head"><h3>Evidence camera</h3><button className="ghost" id="camToggle">Start camera</button></div>
+          <div className="cam"><video id="camVideo" playsInline muted></video><div className="cam-off" id="camOff">Camera off. Turn it on before you ride: it keeps a 4-second pre-roll so the vehicle is captured even after it has passed.</div></div>
+          <button className="capture" id="captureBtn" disabled>Capture wrong-side vehicle</button>
+          <p className="fine">Shortcut: a Bluetooth remote or keyboard sending <kbd>Enter</kbd>/<kbd>Space</kbd> triggers capture. Keep your eyes on the road: capture is one tap, and you can add details after you stop.</p>
+        </article>
+        <article className="card">
+          <div className="card-head"><h3>Reports</h3>
+            <span className="actions"><button className="ghost" id="wsCsv">CSV</button><button className="ghost" id="wsJson">JSON</button><button className="ghost" id="wsSync">Sync</button></span>
+          </div>
+          <div id="wsStats" className="ws-stats"></div>
+          <div id="wsList" className="list"></div>
+        </article>
+        <article className="card wide map-card"><div id="wsMap" className="map"></div></article>
+      </div>
+    </section>
+
+    <section id="view-setup" className="view" aria-label="Setup">
+      <div className="grid setup-grid">
+        <article className="card">
+          <h3>This phone &amp; browser</h3>
+          <p className="fine">Checked live on this device. Grey items are not offered by this browser.</p>
+          <ul className="caps" id="caps"></ul>
+          <div className="row"><button className="ghost" id="permBtn">Grant motion, location &amp; camera</button></div>
+          <p className="fine">Browsers pause sensors when the screen turns off or you switch apps. During a ride keep RideLens open and in front. The app keeps the screen awake where the browser allows it.</p>
+        </article>
+        <article className="card">
+          <h3>OBD-II adapter</h3>
+          <p className="fine">Needs an ELM327-compatible adapter that uses <b>Bluetooth LE</b>. Classic-Bluetooth adapters cannot be reached from any browser.</p>
+          <p className="fine" id="bleNote" hidden></p>
+          <label>Protocol
+            <select id="protocol" defaultValue="0">
+              <option value="0">Auto-detect (recommended: the adapter probes the bike)</option>
+              <option value="5">ISO 14230 KWP2000 fast init</option>
+              <option value="4">ISO 14230 KWP2000 5-baud init</option>
+              <option value="3">ISO 9141-2</option>
+              <option value="6">ISO 15765 CAN 11-bit 500k</option>
+            </select>
+          </label>
+          <div className="row"><button id="bleBtn">Connect Bluetooth LE</button><button className="ghost" id="obdStop">Disconnect</button></div>
+          <details className="fine"><summary>Wi-Fi adapter (advanced)</summary>
+            <p>Browsers cannot talk to Wi-Fi OBD adapters directly. This only works if the RideLens server runs on a device joined to the adapter's Wi-Fi.</p>
+            <label>Wi-Fi bridge URL <input id="bridgeUrl" placeholder="ws://127.0.0.1:8080/obd?host=192.168.0.10&port=35000" /></label>
+            <div className="row"><button className="ghost" id="wifiBtn">Connect via Wi-Fi bridge</button></div>
+          </details>
+          <pre className="log" id="obdLog"></pre>
+        </article>
+        <article className="card">
+          <h3>Phone mount &amp; sensors</h3>
+          <p className="fine">Mount the phone rigidly (vibration-damped mount). Orientation does not matter: RideLens learns "up" when you are stationary and "forward" from your first few speed changes.</p>
+          <label>Lean left/right direction
+            <select id="invertYaw"><option value="">Automatic (learned from GPS turns)</option><option value="normal">Force normal</option><option value="invert">Force inverted</option></select>
+          </label>
+          <label>Units <select id="units"><option value="metric">km/h, °C, m</option><option value="imperial">mph, °F, ft</option></select></label>
+          <label>Theme <select id="theme"><option value="">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
+        </article>
+        <article className="card">
+          <h3>Report server (optional)</h3>
+          <p className="fine">Not needed: rides and reports are stored on this phone. Only set this if you run the RideLens server somewhere to collect reports centrally.</p>
+          <label>Server URL <input id="serverUrl" placeholder="https://your-server:8080" /></label>
+          <label>API token <input id="serverToken" type="password" autoComplete="off" /></label>
+          <div className="row"><button className="ghost" id="testServer">Test connection</button><span id="serverStatus" className="muted"></span></div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <button id="fab" className="fab" title="Report wrong-side vehicle" aria-label="Report wrong-side vehicle">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" /><circle cx="12" cy="13" r="3.5" fill="none" stroke="currentColor" strokeWidth="2" /></svg>
+  </button>
+
+  <nav className="tabbar" id="tabbar" aria-label="RideLens">
+    <button data-view="live" className="active" aria-current="page"><svg viewBox="0 0 24 24"><path d="M4 16a8 8 0 1 1 16 0" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M12 16l4-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>Live</button>
+    <button data-view="report"><svg viewBox="0 0 24 24"><path d="M5 19V9M10 19V5M15 19v-7M20 19v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>Report</button>
+    <button data-view="history"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M12 8v4l3 2" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" /></svg>History</button>
+    <button data-view="wrongside"><svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" /><path d="M12 10v4M12 16.5v.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>Wrong-side</button>
+    <button data-view="setup"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>Setup</button>
+  </nav>
+
+  <dialog id="reportDialog" className="sheet"></dialog>
+  <div id="toast" className="toast" role="status" aria-live="polite"></div>
+
+  </>;
+}

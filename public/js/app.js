@@ -40,9 +40,17 @@ function toast(msg, ms = 2600) {
 }
 
 // ---------------- navigation ----------------
+let currentView = 'live';
 function show(view) {
+  currentView = view;
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${view}`));
-  document.querySelectorAll('.tabbar button').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
+  document.querySelectorAll('.tabbar button').forEach((b) => {
+    const active = b.dataset.view === view;
+    b.classList.toggle('active', active);
+    if (active) b.setAttribute('aria-current', 'page');
+    else b.removeAttribute('aria-current');
+  });
+  publishCockpit();
   if (view === 'history') renderHistory();
   if (view === 'wrongside') renderReports();
   if (view === 'live') setTimeout(() => liveMap?.invalidateSize(), 50);
@@ -167,7 +175,6 @@ async function startRide() {
       else if (lastSeen.gps < t0) setBanner(`GPS: no fix yet (${e.message || 'unavailable'}). Ride with a clear view of the sky.`);
     }));
   } catch (e) { setBanner(e.message); }
-  if (!elm) setBanner('No OBD adapter connected — riding on phone sensors only (no rpm, gear, clutch or temperatures). Connect one in Setup.');
 }
 
 async function stopRide() {
@@ -219,10 +226,42 @@ function arcPath(f0, f1) {
 let rpmMax = 10000;
 $('rpmTrack').setAttribute('d', arcPath(0, 1));
 
-let lastDom = 0, lastStrip = 0;
+let lastDom = 0, lastStrip = 0, lastCockpit = 0;
+let routeSource, routeLength, route = [];
+let timelineSource, timelineLength, timeline = [];
+function publishCockpit(snap = analyzer.snapshot()) {
+  const track = analyzer.track;
+  if (track !== routeSource || track.length !== routeLength) {
+    routeSource = track;
+    routeLength = track.length;
+    const stride = Math.max(1, Math.ceil(track.length / 340));
+    route = [];
+    for (let index = 0; index < track.length; index += stride) route.push(track[index]);
+    if (track.length && route.at(-1) !== track.at(-1)) route.push(track.at(-1));
+  }
+  const samples = analyzer.timeline;
+  if (samples !== timelineSource || samples.length !== timelineLength) {
+    timelineSource = samples;
+    timelineLength = samples.length;
+    const cutoff = (samples.at(-1)?.t ?? 0) - 30000;
+    let start = samples.length;
+    while (start > 0 && samples[start - 1].t >= cutoff) start--;
+    timeline = samples.slice(start);
+  }
+  window.dispatchEvent(new CustomEvent('ridelens:cockpit', {
+    detail: { snap, route, timeline, recording, view: currentView, imperial: imperial() },
+  }));
+}
+window.addEventListener('ridelens:map-visible', () => liveMap?.invalidateSize());
+
+
 function frame(now) {
   requestAnimationFrame(frame);
   const snap = analyzer.snapshot();
+  if (now - lastCockpit >= 250) {
+    lastCockpit = now;
+    publishCockpit(snap);
+  }
   const t = snap.t;
   // strips & G circle (~30 fps)
   if (t && now - lastStrip > 33 && recording) {
@@ -241,7 +280,7 @@ function frame(now) {
     document.querySelector(`.chip[data-src="${k}"]`).classList.toggle('on', nowMs - ts < 3000);
   }
   $('speed').textContent = fmtSpeed(snap.speedKmh);
-  document.querySelector('.speed small').textContent = speedUnit();
+  document.querySelector('#rideDetails .speed small').textContent = speedUnit();
   const sp = $('speedSrc');
   sp.className = `speed-src src ${snap.speedSrc === 'obd' ? 'obd' : snap.speedSrc === 'none' ? 'none' : ''}`;
   sp.textContent = snap.speedSrc === 'none' ? 'No speed yet' : `Speed · ${snap.speedSrc === 'obd' ? 'OBD' : 'GPS'}`;
@@ -579,8 +618,15 @@ async function capture() {
 $('fab').addEventListener('click', capture);
 $('captureBtn').addEventListener('click', capture);
 document.addEventListener('keydown', (e) => {
-  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) || $('reportDialog').open) return;
-  if (e.key === 'Enter' || e.key === ' ' || e.key === 'MediaPlayPause' || e.key === 'AudioVolumeUp') { e.preventDefault(); capture(); }
+  if (e.defaultPrevented || e.repeat || $('reportDialog').open) return;
+  const active = document.activeElement;
+  if (active?.closest('input, textarea, select, [contenteditable="true"]')) return;
+  const mediaKey = e.key === 'MediaPlayPause' || e.key === 'AudioVolumeUp';
+  const activationKey = e.key === 'Enter' || e.key === ' ';
+  if (mediaKey || (activationKey && !active?.closest('button, a[href], summary, [role="button"]'))) {
+    e.preventDefault();
+    capture();
+  }
 });
 
 const thumbUrls = new Map();

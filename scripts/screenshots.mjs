@@ -22,7 +22,7 @@ const HOOK = `
   setElm: (v) => { elm = v; }, get analyzer() { return analyzer; }, get recording() { return recording; },
   renderHistory, renderReports };`;
 
-const browser = await chromium.launch();
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, colorScheme: 'dark', locale: 'en-IN', timezoneId: 'Asia/Kolkata' });
 await ctx.addInitScript(() => {
   // no real GPS in the harness: the simulator supplies fixes through feedGps

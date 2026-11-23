@@ -1,0 +1,237 @@
+:root {
+  --page: #080f20;
+  --surface-1: #101b31;
+  --surface-2: #16243d;
+  --surface-3: #1a2a46;
+  --glass: #111c32e8;
+  --glass-edge: #9ab7eb2b;
+  --text-primary: #edf4ff;
+  --text-secondary: #cad8f1;
+  --text-muted: #a0b3d4;
+  --accent-text: #80ede8;
+  --accent-fill: #247e87;
+  --series-1: #69dadb;
+  --cockpit-aqua: #72f2e4;
+  --cockpit-violet: #c2a8ff;
+  --cockpit-blue: #93baff;
+  --cockpit-amber: #ffd28a;
+  --cockpit-focus: #ffe3a1;
+  --cockpit-ambient: #264d803d;
+  --panel-top: #192944d9;
+  --panel-bottom: #111b30f2;
+}
+:root[data-theme="light"] {
+  --cockpit-aqua: #006e6b;
+  --cockpit-violet: #673cbc;
+  --cockpit-blue: #245bac;
+  --cockpit-amber: #775008;
+  --cockpit-focus: #07448b;
+  --cockpit-ambient: #b4d0fb8c;
+  --panel-top: #fcfdffe8;
+  --panel-bottom: #e7effbf5;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) {
+    --cockpit-aqua: #006e6b;
+    --cockpit-violet: #673cbc;
+    --cockpit-blue: #245bac;
+    --cockpit-amber: #775008;
+    --cockpit-focus: #07448b;
+    --cockpit-ambient: #b4d0fb8c;
+    --panel-top: #fcfdffe8;
+    --panel-bottom: #e7effbf5;
+  }
+}
+body {
+  background: radial-gradient(ellipse at 70% 0, var(--cockpit-ambient), transparent 53%), var(--page);
+  min-height: 100vh;
+}
+[hidden] { display: none !important; }
+button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--cockpit-focus);
+  outline-offset: 2px;
+}
+.topbar { padding-inline: max(16px, calc((100% - 1250px) / 2)); }
+.brand { letter-spacing: -.04em; }
+.brand svg { color: var(--cockpit-aqua); }
+.chips { margin-inline: auto; }
+main { padding: 18px 16px 12px; }
+.cockpit { display: grid; gap: 14px; }
+.cockpit h1, .cockpit h2, .cockpit p { margin: 0; }
+.cockpit h1 { font-size: clamp(1.7rem, 4vw, 2.75rem); line-height: 1.04; letter-spacing: -.056em; }
+.cockpit h2 { font-size: clamp(.9rem, 2.25vw, 1.08rem); line-height: 1.16; letter-spacing: -.025em; }
+.cockpit p { font-size: .75rem; color: var(--text-muted); }
+.cockpit-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.cockpit-heading p { margin-top: 5px; }
+.glass {
+  background: linear-gradient(145deg, var(--panel-top), var(--panel-bottom));
+  border: 1px solid var(--glass-edge);
+  border-radius: 17px;
+  box-shadow: inset 0 1px 0 #ffffff12, 0 12px 28px #0000001d;
+}
+.cockpit-control {
+  color: var(--text-primary);
+  background: var(--surface-2);
+  border: 1px solid var(--glass-edge);
+  border-radius: 10px;
+  font-size: .75rem;
+  font-weight: 650;
+  min-height: 44px;
+  padding: 5px 11px;
+  white-space: nowrap;
+}
+.cockpit-control[aria-pressed=true] { color: var(--cockpit-aqua); border-color: currentColor; }
+.cockpit-control:hover:not(:disabled), .cockpit-link:hover { color: var(--cockpit-aqua); }
+.cockpit-control:disabled { opacity: .7; }
+.ride-metrics, .condition-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
+.cockpit-metric { min-width: 0; padding: 11px 12px; }
+.metric-title {
+  font-size: .77rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+.metric-title span {
+  background: color-mix(in srgb, var(--metric-accent, var(--cockpit-aqua)) 12%, transparent);
+  color: var(--metric-accent, var(--cockpit-aqua));
+  border-radius: 7px;
+  font-size: .9rem;
+  width: 23px;
+  height: 23px;
+  flex: 0 0 23px;
+  display: grid;
+  place-items: center;
+}
+.metric-visibility { --metric-accent: var(--cockpit-violet); }
+.metric-weather { --metric-accent: var(--cockpit-amber); }
+.metric-rain, .metric-wind { --metric-accent: var(--cockpit-blue); }
+.metric-value, .noise-level strong {
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(1.35rem, 3vw, 2.25rem);
+  font-weight: 800;
+  line-height: 1.05;
+  margin: 5px 0 2px;
+}
+.metric-value small, .noise-level small { font: 600 .68rem var(--font-sans); color: var(--text-muted); margin-left: .22em; }
+.metric-caption { color: var(--text-muted); font-size: .68rem; overflow-wrap: anywhere; }
+.cockpit-panels {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  grid-template-areas: "route weather" "trend noise";
+  gap: 12px;
+}
+.cockpit-route, .cockpit-conditions, .cockpit-trend, .cockpit-noise { padding: 13px; min-width: 0; }
+.cockpit-route { grid-area: route; overflow: hidden; display: flex; flex-direction: column; }
+.cockpit-conditions { grid-area: weather; }
+.cockpit-trend { grid-area: trend; }
+.cockpit-noise { grid-area: noise; }
+.panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 7px; }
+.panel-heading p { margin-top: 3px; }
+.condition-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 10px; }
+.condition-grid .glass { border-radius: 12px; background: var(--surface-1); box-shadow: none; }
+.condition-grid .metric-value { font-size: clamp(1.35rem, 2.7vw, 1.85rem); }
+.route-stage {
+  display: grid;
+  place-items: center;
+  perspective: 700px;
+  flex: 1;
+  min-height: 176px;
+  overflow: hidden;
+  margin: 2px 0;
+  background: radial-gradient(ellipse at 52% 58%, #2167873a, transparent 70%);
+}
+.route-plane {
+  width: min(90%, 390px);
+  height: 158px;
+  position: relative;
+  background-color: #10253d;
+  background-image: linear-gradient(#8fb9f429 1px, transparent 1px), linear-gradient(90deg, #8fb9f429 1px, transparent 1px), radial-gradient(ellipse at 55% 58%, #225364, #122039 75%);
+  background-size: 18px 18px, 18px 18px, auto;
+  box-shadow: 0 12px 24px #0007, inset 0 0 28px #409da029;
+  border: 1px solid #67c9e287;
+  border-radius: 12px;
+  transition: transform .22s ease, box-shadow .22s ease;
+}
+.route-angled .route-plane {
+  transform: rotateX(48deg) rotateZ(-13deg);
+  box-shadow: 0 3px #3c8a9e, 0 7px #205269, 0 11px #163449, 0 28px 18px #0007, inset 0 0 28px #409da029;
+}
+.route-plane canvas { width: 100%; height: 100%; display: block; }
+.route-controls { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.weather-attribution {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 32px;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: .7rem;
+}
+.cockpit-link, .weather-attribution a { color: var(--cockpit-aqua); font-size: .72rem; background: none; padding: 5px 0; min-height: 32px; }
+.weather-attribution a { display: flex; align-items: center; }
+.cockpit-plot { display: block; width: 100%; height: 60px; margin: 5px 0; }
+.trend-controls { display: flex; gap: 4px; }
+.trend-controls .cockpit-control { padding-inline: 8px; }
+.noise-level { display: flex; justify-content: space-between; align-items: baseline; font-size: .72rem; color: var(--text-muted); }
+.noise-level strong { color: var(--cockpit-violet); font-size: 1.25rem; }
+#rideDetails { margin-top: 14px; }
+.fab { --fab-size: 48px; }
+@media (min-width: 768px) {
+  .tabbar {
+    max-width: 570px;
+    border: 1px solid var(--glass-edge);
+    border-radius: 16px;
+    margin: 0 auto;
+    bottom: 12px;
+    overflow: hidden;
+  }
+}
+@media (max-width: 700px) {
+  main { padding: 11px 9px 4px; }
+  .cockpit { gap: 8px; }
+  .brand { font-size: .83rem; gap: 3px; }
+  .brand svg { width: 21px; height: 21px; }
+  .cockpit-panels { gap: 7px; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "route route" "weather weather" "trend noise"; }
+  .ride-metrics { gap: 5px; }
+  .glass { border-radius: 12px; }
+  .ride-metrics .cockpit-metric { padding: 6px; }
+  .ride-metrics .metric-title span { display: none; }
+  .metric-title { font-size: .69rem; }
+  .metric-title span { width: 18px; height: 18px; flex-basis: 18px; }
+  .metric-caption { font-size: .64rem; }
+  .metric-value small { font-size: .59rem; }
+  .cockpit-route, .cockpit-conditions, .cockpit-trend, .cockpit-noise { padding: 8px; }
+  .cockpit-conditions .condition-grid { gap: 5px; margin-top: 5px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .condition-grid .cockpit-metric { padding: 6px; }
+  .condition-grid .metric-title { gap: 3px; }
+  .weather-attribution, .weather-attribution a, .weather-attribution .cockpit-link { min-height: 24px; }
+  .route-controls { gap: 6px; }
+  .route-controls .cockpit-link { max-width: 46px; padding: 0; min-height: 44px; }
+  .route-stage { min-height: 69px; }
+  .route-plane { height: 69px; width: min(78%, 350px); background-size: 12px 12px, 12px 12px, auto; }
+  .cockpit-trend .panel-heading, .cockpit-noise .panel-heading { align-items: flex-start; flex-wrap: wrap; row-gap: 3px; }
+  .cockpit-plot { height: 33px; }
+  .cockpit-noise .cockpit-plot { height: 24px; }
+  .cockpit-control { padding-inline: 7px; }
+  .cockpit p { font-size: .68rem; }
+  .fab { --fab-size: 42px; right: 8px; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 4px); }
+  .fab svg { width: 23px; height: 23px; }
+}
+@media (max-width: 395px) {
+  .condition-grid .metric-title span { display: none; }
+}
+@media (max-width: 365px) {
+  .topbar { gap: 5px; padding-inline: 7px; }
+  .chips { gap: 3px; }
+  .chip { padding-inline: 4px; gap: 3px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .route-plane, .view.active { transition: none; animation: none; }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .glass, .topbar, .tabbar { background: var(--surface-1); backdrop-filter: none; }
+}
