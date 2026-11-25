@@ -225,11 +225,7 @@ export function Cockpit() {
   return <div className="cockpit">
     <div className="cockpit-heading">
       <div><h1>Ride dashboard</h1><p>{recording ? `Recording · ${elapsedLabel}` : 'Ready for your next ride'}</p></div>
-      <div className="heading-actions">
-        {/* Text is filled in by app.js (trip ETA); React never changes it after mount. */}
-        <button className="cockpit-control trip-quick" id="tripQuick" aria-controls="tripCard"><span id="tripQuickText">Trip ETA</span></button>
-        <button className="cockpit-control detail-toggle" aria-controls="rideDetails" aria-expanded={details} onClick={() => toggleDetails(!details)}>{details ? 'Hide ride details' : 'Ride details'}</button>
-      </div>
+      <button className="cockpit-control detail-toggle" aria-controls="rideDetails" aria-expanded={details} onClick={() => toggleDetails(!details)}>{details ? 'Hide ride details' : 'Ride details'}</button>
     </div>
     <div className="ride-metrics">
       <Speedometer speed={speed} unit={speedUnit} imperial={imperial}

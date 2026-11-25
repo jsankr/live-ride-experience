@@ -62,7 +62,7 @@ npm run test:browser
 Use Node 22.5 or later. Run `npm run build` for the static production app in `public/`. To regenerate the dashboard screenshots after building, run `RIDELENS_SCREENSHOTS=docs/screenshots npm run test:browser`. Set `CHROMIUM_PATH` to use an existing Chromium executable.
 
 ## Trip: target time and live ETA
-Tap **Trip ETA** at the top of the Live dashboard (or **Set destination** in the Trip card below it). Search for a place, or paste coordinates or a Google Maps/Waze link, then optionally set a target arrival time. Once a trip is running, that top button shows the live ETA and minutes spare (+) or late (−). Tap it to jump to the full Trip card.
+Tap the floating **⏱ Trip ETA** button (bottom-left, opposite the red camera button) (or **Set destination** in the Trip card below it). Search for a place, or paste coordinates or a Google Maps/Waze link, then optionally set a target arrival time. Once a trip is running, that button shows the live ETA and minutes spare (+) or late (−). Tap it to jump to the full Trip card.
 
 The Trip card shows:
 - **ETA**, the target time, minutes spare or late, the remaining distance, and the average speed needed to make the target.
