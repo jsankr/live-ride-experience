@@ -389,3 +389,15 @@ a.btn { display: inline-flex; align-items: center; text-decoration: none; border
 .yt-btn svg { width: 30px; height: 30px; }
 .music-fab button svg { width: 22px; height: 22px; }
 .yt-btn, .music-fab button { display: inline-grid; place-items: center; }
+
+/* dashcam */
+.storage-bar { height: 8px; border-radius: 4px; background: var(--grid); overflow: hidden; margin-top: 8px; }
+.storage-bar i { display: block; height: 100%; width: 0; background: var(--series-1); }
+.clip-day { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); margin: 10px 0 2px; }
+.clip { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 10px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); }
+.clip.locked { border-color: var(--status-critical); }
+.clip .actions button { padding: 7px 10px; font-size: 13px; }
+.clip .inc { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+.clip-video { width: 100%; max-height: 60dvh; background: #000; border-radius: 12px; }
+
+.trip-map { height: 220px; border-radius: 12px; overflow: hidden; background: var(--surface-2); }

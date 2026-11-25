@@ -140,6 +140,18 @@ export function Shell() {
           <button className="capture" id="captureBtn" disabled>Capture wrong-side vehicle</button>
           <p className="fine">Optional shortcut: a Bluetooth remote sending <kbd>Enter</kbd>/<kbd>Space</kbd> also captures.</p>
         </article>
+        <article className="card dashcam-card" id="dashcamCard">
+          <div className="card-head"><h3>Dashcam</h3><span className="muted" id="dcStatus">Off</span></div>
+          <label className="check"><input type="checkbox" id="dcOn" defaultChecked /> <span><b>Record video while the camera is on</b><br /><span className="muted">1-minute files with date, time, speed and GPS stamped on the picture. Older files are overwritten; incident footage is locked.</span></span></label>
+          <div className="two">
+            <label>Keep recordings for <select id="dcDays"><option value="1">1 day</option><option value="3">3 days</option><option value="7">7 days</option></select></label>
+            <label>Quality <select id="dcQuality"><option value="480">480p (~0.5 GB/hour)</option><option value="720">720p (~1.1 GB/hour)</option><option value="1080">1080p (~2 GB/hour)</option></select></label>
+          </div>
+          <div className="storage-bar" aria-hidden="true"><i id="dcBar"></i></div>
+          <p className="fine" id="dcStorage"></p>
+          <p className="fine">Incidents lock the footage 30 s before and after: crash-level impact, the bike falling over, emergency braking, a wrong-side vehicle, or the red camera button. Sensor incidents need <b>Start ride</b> to be on. Each incident stores time, GPS, your speed and heading, and the other vehicle's type, colour and plate when the camera can read them. Files stay in RideLens on this phone. Use <b>Save</b> to put one in Photos/Files, iCloud Drive, Google Drive or OneDrive.</p>
+          <div id="dcList" className="list"></div>
+        </article>
         <article className="card">
           <div className="card-head"><h3>Reports</h3>
             <span className="actions"><button className="ghost" id="wsCsv">CSV</button><button className="ghost" id="wsJson">JSON</button><button className="ghost" id="wsSync">Sync</button></span>
@@ -224,14 +236,21 @@ export function Shell() {
   </nav>
 
   <dialog id="reportDialog" className="sheet"></dialog>
+  <dialog id="clipDialog" className="sheet"></dialog>
   <dialog id="tripDialog" className="sheet">
     <form method="dialog" className="sheet-body" id="tripForm">
       <div className="card-head"><h3>Destination</h3><button className="ghost" value="cancel" formNoValidate>Close</button></div>
-      <label>Search a place, or paste coordinates / a Google Maps or Waze link
+      <label>Search a place, or paste: GPS coordinates · a Plus Code (e.g. WHX8+2G Bengaluru) · a Google Maps / Waze link · a what3words address
         <div className="row" style={{ margin: 0 }}><input id="tripQuery" placeholder="e.g. Nandi Hills" autoComplete="off" style={{ flex: 1 }} /><button type="button" className="ghost" id="tripSearch">Search</button></div>
       </label>
       <ul className="results" id="tripResults"></ul>
       <p className="fine" id="tripPicked">No destination chosen.</p>
+      <p className="fine" style={{ margin: '4px 0' }}>Or <b>tap the map</b> to drop a pin exactly where you are going:</p>
+      <div id="tripMap" className="trip-map"></div>
+      <details className="fine"><summary>what3words key (optional)</summary>
+        <label>what3words API key <input id="w3wKey" type="password" autoComplete="off" placeholder="from developer.what3words.com" /></label>
+        <p>what3words requires a key for converting 3-word addresses to coordinates. It is stored only on this phone. Without a key, use a Plus Code or a dropped pin instead.</p>
+      </details>
       <label>Target arrival time (optional) <input type="time" id="tripTime" /></label>
       <div className="row"><button type="button" id="tripStart" disabled>Start trip</button></div>
       <p className="fine">Place search: OpenStreetMap Nominatim. Route and drive time: OSRM on OpenStreetMap data, without live traffic. Waze and Google Maps do not let other apps read their live ETA, so RideLens computes its own and can open either app for turn-by-turn navigation.</p>

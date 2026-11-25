@@ -81,3 +81,32 @@ test('editing the target time updates the status', async () => {
   trip.state.targetT = 1000 + 60 * 60000;
   assert.equal(trip.status(1000).routeEta.state, 'early');
 });
+
+import { parseDms, olcEncode, olcDecode, parsePlusCode, looksLikeW3w } from '../public/js/trip.js';
+
+test('parses degrees-minutes-seconds coordinates', () => {
+  const p = parseDms(`12°58'17.8"N 77°35'40.6"E`);
+  assert.ok(Math.abs(p.lat - 12.971611) < 1e-5 && Math.abs(p.lon - 77.594611) < 1e-5);
+  assert.ok(parseDms(`33°51'54.5"S 151°12'35.6"E`).lat < 0);
+});
+
+test('Plus Codes: official test vector, round trip and short-code recovery', () => {
+  assert.equal(olcEncode(47.0000625, 8.0000625), '8FVC2222+22');
+  assert.deepEqual(olcDecode('8FVC2222+22'), { lat: 47.0000625, lon: 8.0000625 });
+  const here = { lat: 12.97194, lon: 77.59369 }; // Bengaluru
+  const full = olcEncode(here.lat, here.lon);
+  const back = parsePlusCode(full);
+  assert.ok(Math.abs(back.lat - here.lat) < 0.0002 && Math.abs(back.lon - here.lon) < 0.0002);
+  // a short code as Google Maps shows it, recovered near a reference ~10 km away
+  const short = full.slice(4);
+  const rec = parsePlusCode(`${short} Bengaluru, Karnataka`, { lat: 13.05, lon: 77.62 });
+  assert.ok(Math.abs(rec.lat - here.lat) < 0.0002 && Math.abs(rec.lon - here.lon) < 0.0002, JSON.stringify(rec));
+  assert.deepEqual(parsePlusCode(short), { short, needsReference: true });
+});
+
+test('recognises what3words addresses', () => {
+  assert.ok(looksLikeW3w('///filled.count.soap'));
+  assert.ok(looksLikeW3w('index.home.raft'));
+  assert.ok(!looksLikeW3w('12.97, 77.59'));
+  assert.ok(!looksLikeW3w('MG Road'));
+});

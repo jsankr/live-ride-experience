@@ -1,7 +1,7 @@
 // Local-first storage (IndexedDB). Rides and wrong-side reports live on the
 // phone; syncing to the server is optional and explicit.
 const DB_NAME = 'ridelens';
-const VERSION = 1;
+const VERSION = 2; // v2: dashcam clips (metadata + video blobs kept apart so listing never loads video)
 let dbp;
 
 function open() {
@@ -13,6 +13,9 @@ function open() {
       if (!db.objectStoreNames.contains('rides')) db.createObjectStore('rides', { keyPath: 'id' }).createIndex('startT', 'summary.startT');
       if (!db.objectStoreNames.contains('reports')) db.createObjectStore('reports', { keyPath: 'id' }).createIndex('t', 't');
       if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+      if (!db.objectStoreNames.contains('clips')) db.createObjectStore('clips', { keyPath: 'id' }).createIndex('start', 'start');
+      if (!db.objectStoreNames.contains('clipData')) db.createObjectStore('clipData');
+      if (!db.objectStoreNames.contains('incidents')) db.createObjectStore('incidents', { keyPath: 'id' }).createIndex('t', 't');
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -49,6 +52,7 @@ export const db = {
       transaction.onabort = () => reject(transaction.error);
     });
   },
+  putKey: (store, key, value) => tx(store, 'readwrite', (s) => s.put(value, key)),
   setKv: (key, value) => tx('kv', 'readwrite', (s) => s.put(value, key)),
   getKv: (key) => tx('kv', 'readonly', (s) => s.get(key)),
 };
