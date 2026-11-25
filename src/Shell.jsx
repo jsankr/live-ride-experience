@@ -18,6 +18,27 @@ export function Shell() {
     <section id="view-live" className="view active" aria-label="Live">
       <div className="banner" id="banner" hidden></div>
       <Cockpit />
+      <article className="card trip-card" id="tripCard">
+        <div className="trip-empty" id="tripEmpty">
+          <div><h3>Trip</h3><p className="fine" style={{ margin: 0 }}>Set a destination and target arrival time to get a live ETA.</p></div>
+          <button id="tripSet">Set destination</button>
+        </div>
+        <div className="trip-live" id="tripLive" hidden>
+          <div className="trip-main">
+            <div><span className="label">ETA</span><span className="trip-eta" id="tripEta">—</span><span className="hint" id="tripEtaKind"></span></div>
+            <div><span className="label">Target</span><span className="trip-target" id="tripTarget">—</span><span className="status-pill" id="tripState" hidden></span></div>
+            <div><span className="label">Remaining</span><span className="trip-target" id="tripRemain">—</span><span className="hint" id="tripNeed"></span></div>
+          </div>
+          <div className="trip-dest" id="tripDest"></div>
+          <div className="row">
+            <a className="btn ghost" id="tripWaze" target="_blank" rel="noopener">Navigate in Waze</a>
+            <a className="btn ghost" id="tripGmaps" target="_blank" rel="noopener">Navigate in Google Maps</a>
+            <button className="ghost" id="tripEdit">Edit</button>
+            <button className="ghost" id="tripEnd">End trip</button>
+          </div>
+          <p className="fine" id="tripSource"></p>
+        </div>
+      </article>
       <div className="grid live-grid" id="rideDetails" hidden>
         <article className="card hero">
           <svg className="dial" viewBox="0 0 220 220" aria-hidden="true">
@@ -174,6 +195,20 @@ export function Shell() {
   </nav>
 
   <dialog id="reportDialog" className="sheet"></dialog>
+  <dialog id="tripDialog" className="sheet">
+    <form method="dialog" className="sheet-body" id="tripForm">
+      <div className="card-head"><h3>Destination</h3><button className="ghost" value="cancel" formNoValidate>Close</button></div>
+      <label>Search a place, or paste coordinates / a Google Maps or Waze link
+        <div className="row" style={{ margin: 0 }}><input id="tripQuery" placeholder="e.g. Nandi Hills" autoComplete="off" style={{ flex: 1 }} /><button type="button" className="ghost" id="tripSearch">Search</button></div>
+      </label>
+      <ul className="results" id="tripResults"></ul>
+      <p className="fine" id="tripPicked">No destination chosen.</p>
+      <label>Target arrival time (optional) <input type="time" id="tripTime" /></label>
+      <div className="row"><button type="button" id="tripStart" disabled>Start trip</button></div>
+      <p className="fine">Place search: OpenStreetMap Nominatim. Route and drive time: OSRM on OpenStreetMap data, without live traffic. Waze and Google Maps do not let other apps read their live ETA, so RideLens computes its own and can open either app for turn-by-turn navigation.</p>
+      <p className="fine"><b>Note:</b> opening Waze or Google Maps moves RideLens to the background, where browsers pause its sensors, so ride capture stops. On Android, split screen may keep RideLens visible alongside the map.</p>
+    </form>
+  </dialog>
   <div id="toast" className="toast" role="status" aria-live="polite"></div>
 
   </>;

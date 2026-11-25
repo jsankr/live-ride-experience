@@ -6,6 +6,7 @@ import { Elm327, bleTransport, wsTransport } from './obd.js';
 import { requestMotionPermission, startMotion, startGps, keepAwake } from './sensors.js';
 import { StripChart, FrictionCircle, lineChart, barChart, histogram } from './charts.js';
 import { db, uid } from './db.js';
+import { createTrip, geocode, parseLatLon, wazeUrl, gmapsUrl } from './trip.js';
 import { EvidenceCamera, saveReport, normalizePlate, reportToJson, reportsToCsv, syncReport } from './reports.js';
 
 const $ = (id) => document.getElementById(id);
@@ -881,6 +882,135 @@ $('wsSync').addEventListener('click', async () => {
 });
 
 // ---------------- PWA ----------------
+// ---------------- trip: destination, target time, live ETA ----------------
+let trip = null, tripStopGps = null, tripRouting = false, tripPick = null, tripLine = null, tripPin = null;
+const fmtHM = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+function targetFromInput(v) {
+  if (!v) return null;
+  const [h, m] = v.split(':').map(Number);
+  const d = new Date(); d.setHours(h, m, 0, 0);
+  if (d.getTime() < Date.now() - 60000) d.setDate(d.getDate() + 1); // a time already past means tomorrow
+  return d.getTime();
+}
+
+function openTripDialog() {
+  tripPick = trip ? { ...trip.state.dest } : null;
+  $('tripQuery').value = '';
+  $('tripResults').innerHTML = '';
+  $('tripTime').value = trip?.state.targetT ? new Date(trip.state.targetT).toTimeString().slice(0, 5) : '';
+  showPick();
+  $('tripDialog').showModal();
+}
+function showPick() {
+  $('tripPicked').textContent = tripPick ? `Destination: ${tripPick.name || `${tripPick.lat.toFixed(5)}, ${tripPick.lon.toFixed(5)}`}` : 'No destination chosen.';
+  $('tripStart').disabled = !tripPick;
+}
+async function runTripSearch() {
+  const q = $('tripQuery').value.trim();
+  if (!q) return;
+  const ll = parseLatLon(q);
+  if (ll) { tripPick = { ...ll, name: `${ll.lat.toFixed(5)}, ${ll.lon.toFixed(5)}` }; $('tripResults').innerHTML = ''; showPick(); return; }
+  $('tripResults').innerHTML = '<li class="muted">Searching…</li>';
+  try {
+    const near = analyzer.snapshot().fix;
+    const res = await geocode(q, near ? { lat: near.lat, lon: near.lon } : null);
+    $('tripResults').innerHTML = res.length
+      ? res.map((r, i) => `<li><button type="button" data-i="${i}">${esc(r.name)}</button></li>`).join('')
+      : '<li class="muted">No places found. Try a different name or paste coordinates.</li>';
+    $('tripResults').onclick = (e) => {
+      const b = e.target.closest('button[data-i]'); if (!b) return;
+      tripPick = res[+b.dataset.i];
+      $('tripResults').querySelectorAll('button').forEach((x) => x.classList.toggle('sel', x === b));
+      showPick();
+    };
+  } catch (err) { $('tripResults').innerHTML = `<li class="muted">${esc(err.message)}</li>`; }
+}
+
+function startTrip(dest, targetT) {
+  endTrip(true);
+  trip = createTrip({ dest, targetT });
+  $('tripWaze').href = wazeUrl(dest);
+  $('tripGmaps').href = gmapsUrl(dest);
+  $('tripDest').textContent = `To ${dest.name || `${dest.lat.toFixed(5)}, ${dest.lon.toFixed(5)}`}`;
+  $('tripEmpty').hidden = true; $('tripLive').hidden = false;
+  if (liveMap) {
+    tripPin = L.circleMarker([dest.lat, dest.lon], { radius: 9, color: '#fff', weight: 3, fillColor: statusColor('critical'), fillOpacity: 1 }).bindTooltip('Destination').addTo(liveMap);
+  }
+  try {
+    tripStopGps = startGps(onTripFix, (e) => { if (e.code === 1) toast('Location permission is needed for the trip ETA', 4000); });
+  } catch (e) { toast(e.message, 4000); }
+  renderTrip();
+}
+
+function endTrip(silent) {
+  tripStopGps?.(); tripStopGps = null;
+  trip = null;
+  tripLine?.remove(); tripPin?.remove(); tripLine = tripPin = null;
+  $('tripEmpty').hidden = false; $('tripLive').hidden = true;
+  if (!silent) toast('Trip ended');
+}
+
+async function onTripFix(t, fix) {
+  if (!trip) return;
+  const s = Number.isFinite(fix.accuracy) ? fix : { ...fix, accuracy: 50 };
+  const needRoute = trip.update(t, s);
+  const st = trip.state;
+  // reroute: at most every 30 s (shared public server), none once arrived
+  if (needRoute && !tripRouting && !st.arrived && Date.now() - st.routedAt > 30000) {
+    tripRouting = true;
+    try {
+      await trip.fetchRoute({ lat: fix.lat, lon: fix.lon });
+      trip.update(t, s); // project the current fix onto the new route
+      if (liveMap && trip) {
+        tripLine?.remove();
+        tripLine = L.polyline(trip.state.route.coords.map(([lo, la]) => [la, lo]), { color: getComputedStyle(document.documentElement).getPropertyValue('--series-2').trim(), weight: 4, opacity: 0.8, dashArray: '6 6' }).addTo(liveMap);
+        if (!recording) liveMap.fitBounds(tripLine.getBounds(), { padding: [20, 20] });
+      }
+    } catch { /* status shows routeErr and falls back to straight-line */ }
+    tripRouting = false;
+  }
+  renderTrip();
+}
+
+function renderTrip() {
+  if (!trip) return;
+  const st = trip.status();
+  const best = st.paceEta || st.routeEta || st.straightEta;
+  $('tripEta').textContent = st.arrived ? 'Arrived' : best ? fmtHM(best.eta) : '—';
+  $('tripEtaKind').textContent = st.arrived ? '' : st.paceEta ? `at your pace (route time × ${st.paceEta.pace.toFixed(2)})`
+    : st.routeEta ? 'route time, no live traffic' : st.straightEta ? 'straight-line estimate' : 'waiting for GPS…';
+  $('tripTarget').textContent = st.targetT ? fmtHM(st.targetT) : '—';
+  const pill = $('tripState');
+  if (st.targetT && best && !st.arrived) {
+    const map = { early: ['good', `${best.slackMin} min spare`], 'on-time': ['warning', 'On time'], late: ['critical', `${-best.slackMin} min late`] };
+    const [cls, txt] = map[best.state];
+    pill.hidden = false; pill.className = `status-pill ${cls}`; pill.textContent = txt;
+  } else pill.hidden = true;
+  $('tripRemain').textContent = st.remainingKm != null ? fmtDist(st.remainingKm) : '—';
+  const need = best?.requiredKmh;
+  $('tripNeed').textContent = st.targetT && !st.arrived
+    ? (need == null ? 'target time has passed' : `need avg ${fmtSpeed(need)} ${speedUnit()}`) : '';
+  $('tripSource').textContent = [
+    st.source ? `Source: ${st.source}.` : '',
+    st.routeErr ? `Routing unavailable (${st.routeErr}); using fallback.` : '',
+  ].filter(Boolean).join(' ');
+}
+setInterval(renderTrip, 1000);
+
+$('tripSet').addEventListener('click', openTripDialog);
+$('tripEdit').addEventListener('click', openTripDialog);
+$('tripEnd').addEventListener('click', () => endTrip());
+$('tripSearch').addEventListener('click', runTripSearch);
+$('tripQuery').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runTripSearch(); } });
+$('tripStart').addEventListener('click', () => {
+  if (!tripPick) return;
+  const targetT = targetFromInput($('tripTime').value);
+  $('tripDialog').close();
+  if (trip && trip.state.dest.lat === tripPick.lat && trip.state.dest.lon === tripPick.lon) { trip.state.targetT = targetT; renderTrip(); return; }
+  startTrip(tripPick, targetT);
+});
+
 // ---------------- capability check (real, per device) ----------------
 async function renderCaps() {
   const ua = navigator.userAgent;
