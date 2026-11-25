@@ -92,12 +92,11 @@ Limits:
 - **No real-road testing.** The decision logic is tested on synthetic geometry, plus an end-to-end browser test with a real car photo approaching in the frame. It has not been validated on real roads.
 
 ## Music while riding (YouTube Music)
-On the Live screen, paste a **YouTube Music playlist, album or song link** into the Music card and tap **Play**. RideLens plays it with YouTube's official embedded player.
-- Big ⏮ ▶ ⏭ buttons sit on the card. Floating quick controls also appear at the bottom left of the Live screen, so you don't need to scroll.
-- No YouTube Premium needed. It's separate from the YouTube Music app (no likes or downloads), and ads may play.
-- It stops if RideLens leaves the screen. YouTube's terms require the player to stay visible.
-- **Many label-owned songs block playback outside YouTube's own apps.** RideLens skips those automatically, and stops after 25 blocked tracks in a row with a message.
-- Spotify, Apple Music and the YouTube Music app are still available as shortcuts. They play behind RideLens.
+Four buttons: **previous · play · pause · next**. They're on the Music card, and float at the bottom of the Live screen, so you don't need to scroll.
+- **Set up once:** under the buttons, paste a YouTube Music playlist, album or song link (Share → Copy link) and tap **Save**. After that, ▶ alone starts it.
+- **What plays:** your saved link, inside RideLens, through YouTube's official player. No Premium needed; ads may play. Songs whose owners block outside playback are skipped automatically.
+- **When it stops:** if RideLens leaves the screen.
+- **What the buttons can't do:** they control music inside RideLens only. No web app can control the separate YouTube Music app. For that, use your helmet headset or lock-screen controls.
 
 ## Background running: what's possible
 - **In the web app**: browsers stop sensors, GPS and the camera for pages that aren't on screen, and no website can override that. RideLens keeps the screen awake. If you switch away mid-ride, the ride report logs a **Recording paused** event with its exact duration instead of inventing data for the gap.

@@ -2,7 +2,7 @@ import { airCategory, airCell } from './air-quality.js';
 import { setupEvidenceLocation } from './evidence-location.js';
 import { analyzeEvidence, loadDetector, readPlateCrop } from './evidence-analysis.js';
 import { startAutoWatch } from './wrongside-watch.js';
-import { createYouTubePlayer } from './ytplayer.js';
+import { createYouTubePlayer, parseYouTubeLink } from './ytplayer.js';
 import { createAnalyzer, comfortClass, comfortLegend } from './analytics.js';
 import { Elm327, bleTransport, wsTransport } from './obd.js';
 import { requestMotionPermission, startMotion, startGps, keepAwake } from './sensors.js';
@@ -48,10 +48,11 @@ function toast(msg, ms = 2600) {
 // ---------------- navigation ----------------
 let currentView = 'live';
 let yt = null; // YouTube Music player, created on first use
+let musicCardVisible = false;
 function show(view) {
   currentView = view;
   const tq = document.getElementById('tripQuick'); if (tq) tq.hidden = view !== 'live'; // trip pill only on Live
-  const mf = document.getElementById('musicFab'); if (mf) mf.hidden = view !== 'live' || !yt?.loaded;
+  refreshMusicFab();
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${view}`));
   document.querySelectorAll('.tabbar button').forEach((b) => {
     const active = b.dataset.view === view;
@@ -1087,32 +1088,48 @@ $('tripStart').addEventListener('click', () => {
 });
 
 // ---------------- YouTube Music player ----------------
+// Four buttons: previous, play, pause, next. The playlist link is set once (saved), after
+// which ▶ loads and plays it. Controls the player inside RideLens only: no web page can
+// control the separate YouTube Music app.
 function renderMusic(st) {
-  if (st.notice !== undefined) { if (st.notice) $('ytMsg').textContent = st.notice; else if (/Skipping|Stopped/.test($('ytMsg').textContent)) $('ytMsg').textContent = 'Playing.'; return; }
-  const icon = st.playing || st.buffering ? '⏸' : '▶';
-  $('ytToggle').textContent = icon; $('mfToggle').textContent = icon;
-  $('ytTitle').textContent = st.title ? `${st.title}${st.count > 1 ? `  ·  ${st.index + 1}/${st.count}` : ''}` : '';
-  $('ytControls').hidden = false;
-  $('musicFab').hidden = currentView !== 'live';
+  if (st.notice !== undefined) { if (st.notice) $('ytMsg').textContent = st.notice; else if (/Skipping|Stopped/.test($('ytMsg').textContent)) $('ytMsg').textContent = ''; return; }
+  $('ytTitle').textContent = st.title || '';
+  for (const id of ['ytPlay', 'mfPlay']) $(id).classList.toggle('on', !!(st.playing || st.buffering));
+  for (const id of ['ytPause', 'mfPause']) $(id).classList.toggle('on', !(st.playing || st.buffering));
 }
-$('ytLink').value = settings.ytLink || '';
-$('ytLoad').addEventListener('click', async () => {
-  const link = $('ytLink').value.trim();
-  if (!link) { $('ytMsg').textContent = 'Paste a YouTube Music link first.'; return; }
-  $('ytMsg').textContent = 'Loading YouTube player…';
+function musicReady() { return !!settings.ytLink; }
+// Floating controls hide while the Music card itself is on screen: they would duplicate its
+// buttons and cover the YouTube player (YouTube's terms require it to stay unobstructed).
+new IntersectionObserver(([e]) => { musicCardVisible = e.isIntersecting; refreshMusicFab(); }, { threshold: 0.15 }).observe($('musicCard'));
+function refreshMusicFab() { $('musicFab').hidden = currentView !== 'live' || !musicReady() || musicCardVisible; }
+function refreshMusicUi() {
+  $('ytSetupLabel').textContent = musicReady() ? 'Change playlist' : 'Set your YouTube Music playlist';
+  $('ytSetup').open = !musicReady();
+  refreshMusicFab();
+  if (!musicReady()) $('ytMsg').textContent = 'Paste a playlist link once below, then use the buttons.';
+}
+async function startMusic(link = settings.ytLink) {
+  if (!link) { $('ytSetup').open = true; $('ytMsg').textContent = 'Paste a YouTube Music link below first.'; return; }
   $('ytFrameWrap').hidden = false;
   try {
     yt ??= createYouTubePlayer('ytPlayer', { onChange: renderMusic });
-    const parsed = await yt.load(link);
-    settings.ytLink = link; saveSettings();
-    $('ytMsg').textContent = parsed.list ? 'Playlist loaded. Tap ▶ if it does not start by itself.' : 'Track loaded. Tap ▶ if it does not start by itself.';
-    yt.play(); // explicit play: toggling could pause a playlist that already auto-started
+    if (!yt.loaded || link !== startMusic.current) { $('ytMsg').textContent = 'Loading…'; await yt.load(link); startMusic.current = link; $('ytMsg').textContent = ''; }
+    yt.play();
   } catch (e) { $('ytMsg').textContent = e.message; if (!yt?.loaded) $('ytFrameWrap').hidden = true; }
+}
+$('ytLink').value = settings.ytLink || '';
+$('ytLoad').addEventListener('click', () => {
+  const link = $('ytLink').value.trim();
+  if (!parseYouTubeLink(link)) { $('ytMsg').textContent = "That isn't a YouTube or YouTube Music link."; return; }
+  settings.ytLink = link; saveSettings(); refreshMusicUi();
+  startMusic(link);
 });
 $('ytLink').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('ytLoad').click(); } });
-for (const [a, b, fn] of [['ytPrev', 'mfPrev', 'prev'], ['ytToggle', 'mfToggle', 'toggle'], ['ytNext', 'mfNext', 'next']]) {
-  for (const id of [a, b]) $(id).addEventListener('click', () => yt?.[fn]());
-}
+for (const id of ['ytPlay', 'mfPlay']) $(id).addEventListener('click', () => startMusic());
+for (const id of ['ytPause', 'mfPause']) $(id).addEventListener('click', () => yt?.pause());
+for (const id of ['ytNext', 'mfNext']) $(id).addEventListener('click', () => (yt?.loaded ? yt.next() : startMusic()));
+for (const id of ['ytPrev', 'mfPrev']) $(id).addEventListener('click', () => (yt?.loaded ? yt.prev() : startMusic()));
+refreshMusicUi();
 
 // ---------------- capability check (real, per device) ----------------
 async function renderCaps() {

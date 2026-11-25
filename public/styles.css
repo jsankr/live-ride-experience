@@ -374,12 +374,18 @@ a.btn { display: inline-flex; align-items: center; text-decoration: none; border
 /* YouTube Music player */
 .yt-frame { position: relative; width: 100%; max-width: 420px; aspect-ratio: 16 / 9; min-height: 200px; border-radius: 12px; overflow: hidden; background: #000; margin-top: 8px; }
 .yt-frame iframe, .yt-frame #ytPlayer { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
-.yt-controls { display: flex; gap: 12px; justify-content: center; margin-top: 12px; }
-.yt-btn { width: 64px; height: 56px; font-size: 22px; padding: 0; border-radius: 14px; }
-.yt-play { width: 88px; }
-.yt-title { text-align: center; font-weight: 600; margin-top: 8px; min-height: 1.2em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.yt-controls { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 4px; }
+.yt-btn { width: 100%; height: 64px; font-size: 26px; padding: 0; border-radius: 16px; }
+.yt-btn.on { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.yt-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* floating quick controls: above the trip pill, out of document flow */
 .music-fab { position: fixed; left: 16px; bottom: calc(var(--tabbar-h) + 16px + 48px + 10px + env(safe-area-inset-bottom)); z-index: 25;
   display: flex; gap: 2px; padding: 4px; border-radius: 26px; background: var(--surface-2); border: 2px solid var(--border); box-shadow: 0 8px 24px rgba(0, 0, 0, .35); }
-.music-fab button { width: 48px; height: 40px; padding: 0; font-size: 18px; border-radius: 20px; background: transparent; color: var(--text-primary); }
+.music-fab button.on { background: var(--surface-1); }
+.music-fab button { width: 44px; height: 40px; padding: 0; font-size: 18px; border-radius: 20px; background: transparent; color: var(--text-primary); }
 .music-fab button:focus-visible { outline: 3px solid var(--text-primary); outline-offset: 1px; }
+
+.yt-btn svg { width: 30px; height: 30px; }
+.music-fab button svg { width: 22px; height: 22px; }
+.yt-btn, .music-fab button { display: inline-grid; place-items: center; }

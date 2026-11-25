@@ -40,26 +40,20 @@ export function Shell() {
         </div>
       </article>
       <article className="card music-card" id="musicCard">
-        <div className="card-head"><h3>Music · YouTube Music</h3></div>
-        <label>Paste a YouTube Music (or YouTube) playlist, album or song link
-          <div className="row" style={{ margin: 0 }}><input id="ytLink" placeholder="https://music.youtube.com/playlist?list=…" autoComplete="off" style={{ flex: 1 }} /><button type="button" id="ytLoad">Play</button></div>
-        </label>
-        <p className="fine" id="ytMsg">In the YouTube Music app: open a playlist or album → ⋮ or Share → Copy link, then paste it here.</p>
-        <div className="yt-frame" id="ytFrameWrap" hidden><div id="ytPlayer"></div></div>
-        <div className="yt-controls" id="ytControls" hidden>
-          <button type="button" className="ghost yt-btn" id="ytPrev" aria-label="Previous track">⏮</button>
-          <button type="button" className="yt-btn yt-play" id="ytToggle" aria-label="Play or pause">▶</button>
-          <button type="button" className="ghost yt-btn" id="ytNext" aria-label="Next track">⏭</button>
+        <div className="card-head"><h3>Music</h3><span className="yt-title" id="ytTitle"></span></div>
+        <div className="yt-controls" id="ytControls">
+          <button type="button" className="ghost yt-btn" id="ytPrev" aria-label="Previous song"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2.5v14H6zM20 5v14L9.5 12z" fill="currentColor" /></svg></button>
+          <button type="button" className="yt-btn yt-play" id="ytPlay" aria-label="Play"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15L19.5 12z" fill="currentColor" /></svg></button>
+          <button type="button" className="ghost yt-btn" id="ytPause" aria-label="Pause"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 5h4v14h-4zM13.5 5h4v14h-4z" fill="currentColor" /></svg></button>
+          <button type="button" className="ghost yt-btn" id="ytNext" aria-label="Next song"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 5H18v14h-2.5zM4 5v14l10.5-7z" fill="currentColor" /></svg></button>
         </div>
-        <div className="yt-title" id="ytTitle"></div>
-        <p className="fine">Plays through YouTube's official player inside RideLens, so no YouTube Premium is needed. It is separate from the YouTube Music app (no likes or downloads), ads may play, and it stops if RideLens leaves the screen. Quick controls also float at the bottom of the Live screen while music is loaded.</p>
-        <details className="fine"><summary>Other music apps</summary>
-          <div className="row music-row">
-            <a className="btn music spotify" id="musicSpotify" href="https://open.spotify.com/" target="_blank" rel="noopener">Spotify</a>
-            <a className="btn music ytm" id="musicYtm" href="https://music.youtube.com/" target="_blank" rel="noopener">YouTube Music app</a>
-            <a className="btn music apple" id="musicApple" href="https://music.apple.com/" target="_blank" rel="noopener">Apple Music</a>
-          </div>
-          <p>Those apps play behind RideLens while it stays on screen. The optional Ambient noise meter uses the microphone and may pause them on iPhone.</p>
+        <p className="fine" id="ytMsg"></p>
+        <div className="yt-frame" id="ytFrameWrap" hidden><div id="ytPlayer"></div></div>
+        <details className="fine" id="ytSetup"><summary id="ytSetupLabel">Set your YouTube Music playlist</summary>
+          <label>Paste a YouTube Music playlist, album or song link (Share → Copy link)
+            <div className="row" style={{ margin: 0 }}><input id="ytLink" placeholder="https://music.youtube.com/playlist?list=…" autoComplete="off" style={{ flex: 1 }} /><button type="button" id="ytLoad">Save</button></div>
+          </label>
+          <p>Plays inside RideLens through YouTube's player, so no Premium is needed. Ads may play. Songs whose owners block outside playback are skipped. It stops if RideLens leaves the screen.</p>
         </details>
       </article>
       <div className="grid live-grid" id="rideDetails" hidden>
@@ -211,9 +205,10 @@ export function Shell() {
   {/* Floating trip shortcut: fixed position, so it can never push the one-screen cockpit down.
       Its text is filled in by app.js (live ETA); React never changes it after mount. */}
   <div className="music-fab" id="musicFab" hidden role="group" aria-label="Music controls">
-    <button type="button" id="mfPrev" aria-label="Previous track">⏮</button>
-    <button type="button" id="mfToggle" aria-label="Play or pause">▶</button>
-    <button type="button" id="mfNext" aria-label="Next track">⏭</button>
+    <button type="button" id="mfPrev" aria-label="Previous song"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2.5v14H6zM20 5v14L9.5 12z" fill="currentColor" /></svg></button>
+    <button type="button" id="mfPlay" aria-label="Play"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15L19.5 12z" fill="currentColor" /></svg></button>
+    <button type="button" id="mfPause" aria-label="Pause"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 5h4v14h-4zM13.5 5h4v14h-4z" fill="currentColor" /></svg></button>
+    <button type="button" id="mfNext" aria-label="Next song"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 5H18v14h-2.5zM4 5v14l10.5-7z" fill="currentColor" /></svg></button>
   </div>
   <button id="tripQuick" className="trip-fab" aria-controls="tripCard"><span aria-hidden="true">⏱</span><span id="tripQuickText">Trip ETA</span></button>
   <button id="fab" className="fab" title="Report wrong-side vehicle" aria-label="Report wrong-side vehicle">

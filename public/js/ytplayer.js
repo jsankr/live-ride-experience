@@ -108,6 +108,7 @@ export function createYouTubePlayer(elementId, { onChange } = {}) {
     load,
     toggle() { if (!player) return; if (state === 1 || state === 3) player.pauseVideo(); else player.playVideo(); },
     play: () => call('playVideo'),
+    pause: () => call('pauseVideo'),
     next: () => call('nextVideo'),
     prev: () => call('previousVideo'),
     get loaded() { return !!player; },
