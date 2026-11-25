@@ -34,12 +34,26 @@ jobs:
           fi
           npm run test:browser
 
-  deploy:
+  # Upload and deploy run in separate jobs: when they share a job, deploy-pages
+  # can look up the artifact ~0.5 s after upload, before GitHub has indexed it,
+  # and fails with 'No artifacts named "github-pages"' (actions/deploy-pages#451).
+  pages-artifact:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: test
     runs-on: ubuntu-latest
     permissions:
-      contents: read   # a job-level block replaces the defaults; checkout needs this
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: pages-artifact
+    runs-on: ubuntu-latest
+    permissions:
       pages: write
       id-token: write
     environment:
@@ -49,10 +63,6 @@ jobs:
       group: pages
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: public
       - id: deployment
         uses: actions/deploy-pages@v4
