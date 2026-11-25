@@ -182,6 +182,9 @@ export function Shell() {
     </section>
   </main>
 
+  {/* Floating trip shortcut: fixed position, so it can never push the one-screen cockpit down.
+      Its text is filled in by app.js (live ETA); React never changes it after mount. */}
+  <button id="tripQuick" className="trip-fab" aria-controls="tripCard"><span aria-hidden="true">⏱</span><span id="tripQuickText">Trip ETA</span></button>
   <button id="fab" className="fab" title="Report wrong-side vehicle" aria-label="Report wrong-side vehicle">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" /><circle cx="12" cy="13" r="3.5" fill="none" stroke="currentColor" strokeWidth="2" /></svg>
   </button>

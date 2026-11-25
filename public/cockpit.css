@@ -419,9 +419,14 @@ main { padding: 18px 16px 12px; }
   .ride-summary dd { font-size: .68rem; }
 }
 
-/* trip shortcut in the dashboard heading */
-.heading-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
-.trip-quick { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.trip-quick[data-tone="good"] { border-color: var(--status-good); }
-.trip-quick[data-tone="warning"] { border-color: var(--status-warning); }
-.trip-quick[data-tone="critical"] { border-color: var(--status-critical); }
+/* floating trip shortcut, bottom-left (mirrors the camera button on the right) */
+.trip-fab { position: fixed; left: 16px; bottom: calc(var(--tabbar-h) + 16px + env(safe-area-inset-bottom)); z-index: 25;
+  height: 48px; max-width: calc(100vw - 16px - 16px - 48px - 12px); display: inline-flex; align-items: center; gap: 8px;
+  padding: 0 16px; border-radius: 24px; font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-primary);
+  background: var(--surface-2); border: 2px solid var(--border); box-shadow: 0 8px 24px rgba(0, 0, 0, .35); }
+.trip-fab #tripQuickText { overflow: hidden; text-overflow: ellipsis; }
+.trip-fab[data-tone="good"] { border-color: var(--status-good); }
+.trip-fab[data-tone="warning"] { border-color: var(--status-warning); }
+.trip-fab[data-tone="critical"] { border-color: var(--status-critical); }
+.trip-fab:focus-visible { outline: 3px solid var(--text-primary); outline-offset: 3px; }
