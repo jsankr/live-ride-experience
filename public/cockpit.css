@@ -418,3 +418,10 @@ main { padding: 18px 16px 12px; }
   .ride-summary dt, .ride-summary small { font-size: .56rem; }
   .ride-summary dd { font-size: .68rem; }
 }
+
+/* trip shortcut in the dashboard heading */
+.heading-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+.trip-quick { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.trip-quick[data-tone="good"] { border-color: var(--status-good); }
+.trip-quick[data-tone="warning"] { border-color: var(--status-warning); }
+.trip-quick[data-tone="critical"] { border-color: var(--status-critical); }
