@@ -58,11 +58,26 @@ jobs:
       id-token: write
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url || steps.retry1.outputs.page_url || steps.retry2.outputs.page_url }}
     concurrency:
       group: pages
       cancel-in-progress: true
     steps:
       - uses: actions/configure-pages@v5
+      # GitHub's Pages API sometimes answers 500 ("re-run the deployment at a later time").
+      # deploy-pages gives up on the first error, which leaves the site on an old build,
+      # so retry twice, waiting 1 and then 3 minutes. A real failure still fails the job.
       - id: deployment
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+      - if: steps.deployment.outcome == 'failure'
+        run: sleep 60
+      - id: retry1
+        if: steps.deployment.outcome == 'failure'
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+      - if: steps.deployment.outcome == 'failure' && steps.retry1.outcome == 'failure'
+        run: sleep 180
+      - id: retry2
+        if: steps.deployment.outcome == 'failure' && steps.retry1.outcome == 'failure'
         uses: actions/deploy-pages@v4
