@@ -40,13 +40,27 @@ export function Shell() {
         </div>
       </article>
       <article className="card music-card" id="musicCard">
-        <div className="card-head"><h3>Music</h3></div>
-        <div className="row music-row">
-          <a className="btn music spotify" id="musicSpotify" href="https://open.spotify.com/" target="_blank" rel="noopener">Spotify</a>
-          <a className="btn music ytm" id="musicYtm" href="https://music.youtube.com/" target="_blank" rel="noopener">YouTube Music</a>
-          <a className="btn music apple" id="musicApple" href="https://music.apple.com/" target="_blank" rel="noopener">Apple Music</a>
+        <div className="card-head"><h3>Music · YouTube Music</h3></div>
+        <label>Paste a YouTube Music (or YouTube) playlist, album or song link
+          <div className="row" style={{ margin: 0 }}><input id="ytLink" placeholder="https://music.youtube.com/playlist?list=…" autoComplete="off" style={{ flex: 1 }} /><button type="button" id="ytLoad">Play</button></div>
+        </label>
+        <p className="fine" id="ytMsg">In the YouTube Music app: open a playlist or album → ⋮ or Share → Copy link, then paste it here.</p>
+        <div className="yt-frame" id="ytFrameWrap" hidden><div id="ytPlayer"></div></div>
+        <div className="yt-controls" id="ytControls" hidden>
+          <button type="button" className="ghost yt-btn" id="ytPrev" aria-label="Previous track">⏮</button>
+          <button type="button" className="yt-btn yt-play" id="ytToggle" aria-label="Play or pause">▶</button>
+          <button type="button" className="ghost yt-btn" id="ytNext" aria-label="Next track">⏭</button>
         </div>
-        <p className="fine">Start your music, then come back to RideLens. The music app keeps playing in the background while RideLens stays on screen and keeps recording. RideLens's camera does not use the microphone. The optional Ambient noise meter does, and on iPhone it may pause your music while it's on.</p>
+        <div className="yt-title" id="ytTitle"></div>
+        <p className="fine">Plays through YouTube's official player inside RideLens, so no YouTube Premium is needed. It is separate from the YouTube Music app (no likes or downloads), ads may play, and it stops if RideLens leaves the screen. Quick controls also float at the bottom of the Live screen while music is loaded.</p>
+        <details className="fine"><summary>Other music apps</summary>
+          <div className="row music-row">
+            <a className="btn music spotify" id="musicSpotify" href="https://open.spotify.com/" target="_blank" rel="noopener">Spotify</a>
+            <a className="btn music ytm" id="musicYtm" href="https://music.youtube.com/" target="_blank" rel="noopener">YouTube Music app</a>
+            <a className="btn music apple" id="musicApple" href="https://music.apple.com/" target="_blank" rel="noopener">Apple Music</a>
+          </div>
+          <p>Those apps play behind RideLens while it stays on screen. The optional Ambient noise meter uses the microphone and may pause them on iPhone.</p>
+        </details>
       </article>
       <div className="grid live-grid" id="rideDetails" hidden>
         <article className="card hero">
@@ -196,6 +210,11 @@ export function Shell() {
 
   {/* Floating trip shortcut: fixed position, so it can never push the one-screen cockpit down.
       Its text is filled in by app.js (live ETA); React never changes it after mount. */}
+  <div className="music-fab" id="musicFab" hidden role="group" aria-label="Music controls">
+    <button type="button" id="mfPrev" aria-label="Previous track">⏮</button>
+    <button type="button" id="mfToggle" aria-label="Play or pause">▶</button>
+    <button type="button" id="mfNext" aria-label="Next track">⏭</button>
+  </div>
   <button id="tripQuick" className="trip-fab" aria-controls="tripCard"><span aria-hidden="true">⏱</span><span id="tripQuickText">Trip ETA</span></button>
   <button id="fab" className="fab" title="Report wrong-side vehicle" aria-label="Report wrong-side vehicle">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" /><circle cx="12" cy="13" r="3.5" fill="none" stroke="currentColor" strokeWidth="2" /></svg>

@@ -91,8 +91,13 @@ Limits:
 - **Detection range** depends on the phone's speed. In CI-like headless Chromium without a GPU, a car was first detected at about 15 m.
 - **No real-road testing.** The decision logic is tested on synthetic geometry, plus an end-to-end browser test with a real car photo approaching in the frame. It has not been validated on real roads.
 
-## Music while riding
-The Live screen has **Spotify / YouTube Music / Apple Music** buttons. Start your music, then return to RideLens: those apps keep playing in the background while RideLens stays in front and keeps recording. The camera doesn't use the microphone. The optional ambient-noise meter does, and on iPhone it may pause music.
+## Music while riding (YouTube Music)
+On the Live screen, paste a **YouTube Music playlist, album or song link** into the Music card and tap **Play**. RideLens plays it with YouTube's official embedded player.
+- Big ⏮ ▶ ⏭ buttons sit on the card. Floating quick controls also appear at the bottom left of the Live screen, so you don't need to scroll.
+- No YouTube Premium needed. It's separate from the YouTube Music app (no likes or downloads), and ads may play.
+- It stops if RideLens leaves the screen. YouTube's terms require the player to stay visible.
+- **Many label-owned songs block playback outside YouTube's own apps.** RideLens skips those automatically, and stops after 25 blocked tracks in a row with a message.
+- Spotify, Apple Music and the YouTube Music app are still available as shortcuts. They play behind RideLens.
 
 ## Background running: what's possible
 - **In the web app**: browsers stop sensors, GPS and the camera for pages that aren't on screen, and no website can override that. RideLens keeps the screen awake. If you switch away mid-ride, the ride report logs a **Recording paused** event with its exact duration instead of inventing data for the gap.
