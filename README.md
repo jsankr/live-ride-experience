@@ -91,8 +91,37 @@ Limits:
 - **Detection range** depends on the phone's speed. In CI-like headless Chromium without a GPU, a car was first detected at about 15 m.
 - **No real-road testing.** The decision logic is tested on synthetic geometry, plus an end-to-end browser test with a real car photo approaching in the frame. It has not been validated on real roads.
 
-## Music while riding
-The Live screen has **Spotify / YouTube Music / Apple Music** buttons. Start your music, then return to RideLens: those apps keep playing in the background while RideLens stays in front and keeps recording. The camera doesn't use the microphone. The optional ambient-noise meter does, and on iPhone it may pause music.
+## Dashcam
+**Wrong-side → Start camera** with **Dashcam** on (the default) records the road continuously.
+- **Files:** 1-minute files named `RideLens_YYYY-MM-DD_HH-MM-SS.mp4`. They're MP4 on iPhone Safari and recent Chrome; Firefox can only make `.webm`.
+- **Stamp:** every frame shows date, time, speed and GPS.
+- **Retention:** recordings are kept for 1, 3, 5 (default) or 7 days, then overwritten. The oldest are also removed early if the browser's storage allowance runs low.
+- **Quality and space:** 480p is about 0.5 GB/hour, 720p about 1.1 GB/hour, 1080p about 2 GB/hour, and 4K (default) about 7 GB/hour. These are estimates from the bitrates used. 4K is requested from the camera, and the card shows the resolution actually delivered: phone browsers often give web pages no more than 1080p.
+- **Incidents** lock the footage from 30 s before to 30 s after, and those clips are never overwritten. Triggers:
+  - crash-level impact (≥ 4 g);
+  - the bike lying on its side for 1.5 s;
+  - emergency braking (≥ 0.6 g);
+  - a wrong-side vehicle;
+  - the red camera button.
+
+  Each incident stores the time, GPS, your speed and heading, and (when the camera can read them) the other vehicle's type, colour, number plate and closing speed. The sensor triggers (impact, fall, braking) need **Start ride**.
+- **Saving a copy:** each clip's **Save** button opens the phone's share sheet: Save Video / Save to Files, iCloud Drive, Google Drive, OneDrive. A web app can't write into Photos or cloud folders by itself. Automatic cloud upload would need your own Google/Microsoft app registration; iCloud has no public upload API.
+- **Limit:** like every camera feature, recording stops whenever RideLens isn't on screen.
+
+## Precise destinations
+Besides place search, the Trip dialog accepts:
+- **GPS coordinates**, decimal or degrees-minutes-seconds;
+- **Plus Codes** as shown in Google Maps (full codes, or short codes plus a town, e.g. `WHX8+2G Bengaluru`), decoded offline with no key;
+- a **dropped pin**: tap the map;
+- Google Maps and Waze links;
+- **what3words** addresses, which need your what3words API key.
+
+## Music while riding (YouTube Music)
+Four buttons: **previous · play · pause · next**. They're on the Music card, and float at the bottom of the Live screen, so you don't need to scroll.
+- **Set up once:** under the buttons, paste a YouTube Music playlist, album or song link (Share → Copy link) and tap **Save**. After that, ▶ alone starts it.
+- **What plays:** your saved link, inside RideLens, through YouTube's official player. No Premium needed; ads may play. Songs whose owners block outside playback are skipped automatically.
+- **When it stops:** if RideLens leaves the screen.
+- **What the buttons can't do:** they control music inside RideLens only. No web app can control the separate YouTube Music app. For that, use your helmet headset or lock-screen controls.
 
 ## Background running: what's possible
 - **In the web app**: browsers stop sensors, GPS and the camera for pages that aren't on screen, and no website can override that. RideLens keeps the screen awake. If you switch away mid-ride, the ride report logs a **Recording paused** event with its exact duration instead of inventing data for the gap.

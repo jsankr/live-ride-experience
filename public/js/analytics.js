@@ -37,6 +37,9 @@ export const DEFAULTS = {
   clutchMinMs: 120,
   clutchMaxMs: 4000,
   overheatC: 105,
+  crashG: 4.0,              // total linear acceleration (g) treated as a crash-level impact
+  fallAngleDeg: 55,         // phone's measured 'down' tilted this far from the learned upright...
+  fallMs: 1500,             // ...for this long = bike on its side
   mountLearnWeight: 10,     // evidence needed before trusting the learned forward axis
   // Gyro sign conventions differ between browsers (e.g. iOS vs Android). By default the
   // sign is learned from GPS heading changes; set true/false only to force it.
@@ -176,7 +179,7 @@ export function createAnalyzer(options = {}) {
     const refLive = s.refAccel != null && t - s.refAccelT < 1500;
     const steady = refLive ? Math.abs(s.refAccel) < 0.5 : linSH < cfg.gravityFreeze;
     const warmup = t - s.startT < 3000;
-    if (warmup || steady) {
+    if (warmup || (steady && s.tiltSince == null)) {
       const k = 1 - Math.exp(-dt / (warmup ? 0.5 : cfg.gravityTau));
       s.gravity = add(s.gravity, scale(sub(s.accSmooth, s.gravity), k));
     }
@@ -251,10 +254,33 @@ export function createAnalyzer(options = {}) {
 
     // 6. potholes & bumps
     detectImpact(t, vert);
+    detectCrash(t, lin);
     // 7. braking / acceleration
     detectLong(t);
     // 8. timeline sample at 2 Hz
     if (t - s.lastTimelineT >= 500) { s.lastTimelineT = t; sampleTimeline(t); }
+  }
+
+  // Crash-level impact and fall detection, used by the dashcam to lock footage.
+  // A phone fixed to the bike sees gravity along the bike's own vertical even in a lean,
+  // so a large, sustained tilt of measured gravity away from the learned 'up' means the
+  // bike is lying on its side.
+  function detectCrash(t, lin) {
+    const g = norm(lin) / G;
+    if (g >= cfg.crashG && t - (s.lastCrashT || 0) > 10000) {
+      s.lastCrashT = t;
+      emit('crash', t, { severity: 'critical', peakG: +g.toFixed(1) });
+    }
+    if (!s.up || !s.accSmooth || t - s.startT < 5000) return;
+    const cos = dot(unit(s.accSmooth), s.up);
+    const angle = Math.acos(Math.max(-1, Math.min(1, cos))) * 180 / Math.PI;
+    if (angle >= cfg.fallAngleDeg) {
+      s.tiltSince ??= t;
+      if (!s.fallFired && t - s.tiltSince >= cfg.fallMs) {
+        s.fallFired = true;
+        emit('fall', s.tiltSince, { severity: 'critical', tiltDeg: Math.round(angle) });
+      }
+    } else { s.tiltSince = null; s.fallFired = false; }
   }
 
   function detectImpact(t, vert) {

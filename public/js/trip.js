@@ -35,6 +35,73 @@ export function parseLatLon(input) {
   return null;
 }
 
+// Degrees-minutes-seconds, e.g. 12°58'17.8"N 77°35'40.6"E (Google Maps copy format)
+export function parseDms(input) {
+  const re = /(\d{1,3})°\s*(\d{1,2})['′]\s*(\d{1,2}(?:\.\d+)?)["″]?\s*([NSEW])/gi;
+  const parts = [...String(input || '').matchAll(re)];
+  if (parts.length !== 2) return null;
+  const val = ([, d, m, sec, h]) => (+d + +m / 60 + +sec / 3600) * (/[SW]/i.test(h) ? -1 : 1);
+  const a = parts.find((p) => /[NS]/i.test(p[4])), b = parts.find((p) => /[EW]/i.test(p[4]));
+  if (!a || !b) return null;
+  return { lat: +val(a).toFixed(7), lon: +val(b).toFixed(7) };
+}
+
+// ---------- Plus Codes (Open Location Code), decoded offline ----------
+const OLC = '23456789CFGHJMPQRVWX';
+const OLC_RES = [20, 1, 0.05, 0.0025, 0.000125];
+export function olcEncode(lat, lon, len = 10) {
+  lat = Math.min(89.9999999, Math.max(-90, lat)) + 90;
+  lon = ((((lon + 180) % 360) + 360) % 360);
+  let code = '';
+  for (let i = 0; i < len / 2; i++) {
+    const r = OLC_RES[i];
+    const dl = Math.floor(lat / r), dn = Math.floor(lon / r);
+    lat -= dl * r; lon -= dn * r;
+    code += OLC[dl] + OLC[dn];
+    if (code.length === 8) code += '+';
+  }
+  return code.length === 8 ? `${code}+` : code;
+}
+export function olcDecode(code) {
+  const c = String(code).toUpperCase().replace('+', '').replace(/0+$/, '');
+  if (!/^[23456789CFGHJMPQRVWX]+$/.test(c) || c.length < 2) return null;
+  let lat = -90, lon = -180, latRes = 20, lonRes = 20;
+  for (let i = 0; i < Math.min(c.length, 10); i += 2) {
+    latRes = OLC_RES[i / 2]; lonRes = latRes;
+    lat += OLC.indexOf(c[i]) * latRes; lon += OLC.indexOf(c[i + 1] ?? '2') * lonRes;
+  }
+  for (let i = 10; i < c.length; i++) { // grid refinement: 4 rows x 5 columns
+    latRes /= 5; lonRes /= 4;
+    const d = OLC.indexOf(c[i]);
+    lat += Math.floor(d / 4) * latRes; lon += (d % 4) * lonRes;
+  }
+  return { lat: +(lat + latRes / 2).toFixed(7), lon: +(lon + lonRes / 2).toFixed(7) };
+}
+// Full code ("7J4VWHX8+2G") or short code + reference ("WHX8+2G" near a known point).
+export function parsePlusCode(input, ref) {
+  const m = String(input || '').toUpperCase().match(/\b([23456789CFGHJMPQRVWX]{2,8})\+([23456789CFGHJMPQRVWX]{2,3})?\b/);
+  if (!m) return null;
+  const head = m[1], tail = m[2] || '';
+  if (head.length === 8) return olcDecode(head + tail);
+  if (!ref || head.length % 2) return { short: `${head}+${tail}`, needsReference: true };
+  const pad = 8 - head.length;
+  const res = 20 ** (2 - pad / 2);
+  const full = olcEncode(ref.lat, ref.lon).replace('+', '').slice(0, pad) + head + tail;
+  const p = olcDecode(full);
+  // pick the candidate cell nearest the reference
+  if (p.lat - ref.lat > res / 2) p.lat -= res; else if (ref.lat - p.lat > res / 2) p.lat += res;
+  if (p.lon - ref.lon > res / 2) p.lon -= res; else if (ref.lon - p.lon > res / 2) p.lon += res;
+  return { lat: +p.lat.toFixed(7), lon: +p.lon.toFixed(7) };
+}
+export const looksLikeW3w = (s) => /^(?:\/\/\/)?\p{L}+\.\p{L}+\.\p{L}+$/u.test(String(s || '').trim());
+export async function what3words(words, key) {
+  const w = String(words).trim().replace(/^\/\/\//, '');
+  const res = await fetch(`https://api.what3words.com/v3/convert-to-coordinates?words=${encodeURIComponent(w)}&key=${encodeURIComponent(key)}`);
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.coordinates) throw new Error(j.error?.message || `what3words answered ${res.status}`);
+  return { lat: j.coordinates.lat, lon: j.coordinates.lng, name: `///${w}${j.nearestPlace ? ` · near ${j.nearestPlace}` : ''}` };
+}
+
 export const wazeUrl = ({ lat, lon }) => `https://waze.com/ul?ll=${lat}%2C${lon}&navigate=yes`;
 export const gmapsUrl = ({ lat, lon }) =>
   `https://www.google.com/maps/dir/?api=1&destination=${lat}%2C${lon}&travelmode=two-wheeler&dir_action=navigate`;
