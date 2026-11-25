@@ -211,10 +211,17 @@ try {
   assert.equal(await evidencePage.getByRole('region', { name: 'Air pollution' }).count(), 0);
   await evidencePage.getByRole('button', { name: 'Start camera' }).click();
   await evidencePage.getByRole('button', { name: 'Capture wrong-side vehicle' }).click();
-  await evidencePage.waitForFunction(async () => {
-    const { db } = await import('/js/db.js');
-    return (await db.all('reports')).some((report) => report.analysis?.status === 'complete');
-  });
+  // Poll explicitly: an async predicate returns a Promise, which waitForFunction treats as
+  // truthy at once, so the old wait passed before the analysis had been saved.
+  for (let i = 0; ; i++) {
+    const done = await evidencePage.evaluate(async () => {
+      const { db } = await import('/js/db.js');
+      return (await db.all('reports')).some((report) => report.analysis?.status === 'complete');
+    });
+    if (done) break;
+    assert.ok(i < 120, 'evidence analysis did not complete within 60 s');
+    await evidencePage.waitForTimeout(500);
+  }
   await evidencePage.locator('#wsList .item').first().click();
   await evidencePage.getByText('Air at capture · India AQI 233', { exact: false }).waitFor();
   assert.equal(await evidencePage.locator('#rpType').inputValue(), 'Two-wheeler');
