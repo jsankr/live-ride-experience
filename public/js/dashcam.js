@@ -59,8 +59,11 @@ export class Dashcam {
     this.video = video;
     // Draw the camera plus a date/time/speed/GPS stamp onto a canvas and record that,
     // so every frame carries its own evidence of when and where.
+    // `height` is the target for the shorter side (720p, 1080p, 2160p = 4K); never upscale,
+    // so the file is honest about what the camera actually delivered.
     const vw = video.videoWidth || 1280, vh = video.videoHeight || 720;
-    const h = Math.min(this.height, vh), w = Math.round((vw / vh) * h / 2) * 2;
+    const k = Math.min(1, this.height / Math.min(vw, vh));
+    const w = Math.round((vw * k) / 2) * 2, h = Math.round((vh * k) / 2) * 2;
     this.canvas = Object.assign(document.createElement('canvas'), { width: w, height: h });
     this.ctx = this.canvas.getContext('2d');
     this.stream = this.canvas.captureStream(this.fps);

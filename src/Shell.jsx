@@ -144,8 +144,8 @@ export function Shell() {
           <div className="card-head"><h3>Dashcam</h3><span className="muted" id="dcStatus">Off</span></div>
           <label className="check"><input type="checkbox" id="dcOn" defaultChecked /> <span><b>Record video while the camera is on</b><br /><span className="muted">1-minute files with date, time, speed and GPS stamped on the picture. Older files are overwritten; incident footage is locked.</span></span></label>
           <div className="two">
-            <label>Keep recordings for <select id="dcDays"><option value="1">1 day</option><option value="3">3 days</option><option value="7">7 days</option></select></label>
-            <label>Quality <select id="dcQuality"><option value="480">480p (~0.5 GB/hour)</option><option value="720">720p (~1.1 GB/hour)</option><option value="1080">1080p (~2 GB/hour)</option></select></label>
+            <label>Keep recordings for <select id="dcDays"><option value="1">1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="7">7 days</option></select></label>
+            <label>Quality <select id="dcQuality"><option value="480">480p (~0.5 GB/hour)</option><option value="720">720p (~1.1 GB/hour)</option><option value="1080">1080p (~2 GB/hour)</option><option value="2160">4K (~7 GB/hour, if the camera allows)</option></select></label>
           </div>
           <div className="storage-bar" aria-hidden="true"><i id="dcBar"></i></div>
           <p className="fine" id="dcStorage"></p>

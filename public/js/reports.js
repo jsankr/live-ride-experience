@@ -31,9 +31,9 @@ export function findPlates(text) {
 export class EvidenceCamera {
   constructor(video) { this.video = video; this.ring = []; this.stream = null; this.timer = null; }
 
-  async start() {
+  async start({ width = 1920, height = 1080 } = {}) {
     this.stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false,
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: width }, height: { ideal: height } }, audio: false,
     });
     const track = this.stream.getVideoTracks()[0];
     if (track?.getCapabilities?.().focusMode?.includes('continuous')) {

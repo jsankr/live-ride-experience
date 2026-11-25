@@ -17,7 +17,7 @@ const G = 9.80665;
 
 // ---------------- settings ----------------
 const settings = (() => {
-  const def = { protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: '', keepSide: 'left', autoWatch: true, ytLink: '', dashcam: true, dcDays: '7', dcQuality: '720', w3wKey: '' };
+  const def = { protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: '', keepSide: 'left', autoWatch: true, ytLink: '', dashcam: true, dcDays: '5', dcQuality: '2160', w3wKey: '' };
   try {
     const v = { ...def, ...JSON.parse(localStorage.getItem('ridelens.settings') || '{}') };
     if (typeof v.invertYaw === 'boolean') v.invertYaw = v.invertYaw ? 'invert' : ''; // migrate old checkbox
@@ -627,7 +627,8 @@ async function setCamera(on) {
   cameraChanging = true;
   $('camToggle').disabled = true;
   try {
-    if (on) { await camera.start(); } else camera.stop();
+    // 4K dashcam asks the camera for 3840x2160; browsers may deliver less (shown in the status)
+    if (on) { await camera.start(+settings.dcQuality >= 2160 && settings.dashcam ? { width: 3840, height: 2160 } : {}); } else camera.stop();
     camOn = on;
     evidenceLocation.camera(on);
     if (on) loadDetector().catch(() => {});
@@ -1178,7 +1179,7 @@ refreshMusicUi();
 
 // ---------------- dashcam ----------------
 let dashcam = null, pendingLocks = [];
-const DC_BITRATE = { 480: 1000000, 720: 2500000, 1080: 4500000 };
+const DC_BITRATE = { 480: 1000000, 720: 2500000, 1080: 4500000, 2160: 16000000 };
 function dcOverlay() {
   const sn = analyzer.snapshot();
   const fresh = sn.fix && Date.now() - (sn.fix.t ?? 0) < 5000;
@@ -1193,7 +1194,9 @@ function startDashcam() {
   if (!dashcam.supported) { $('dcStatus').textContent = 'This browser cannot record video'; dashcam = null; return; }
   try { dashcam.start($('camVideo')); } catch (e) { $('dcStatus').textContent = e.message; dashcam = null; return; }
   navigator.storage?.persist?.().catch(() => {});
-  $('dcStatus').textContent = `● Recording ${dashcam.mime.startsWith('video/mp4') ? 'MP4' : 'WebM'}`;
+  const { width: rw, height: rh } = dashcam.canvas, want = +settings.dcQuality;
+  const got = Math.min(rw, rh);
+  $('dcStatus').textContent = `● Recording ${dashcam.mime.startsWith('video/mp4') ? 'MP4' : 'WebM'} · ${rw}×${rh}${got < want ? ' (camera limit)' : ''}`;
 }
 function stopDashcam() { dashcam?.stop(); dashcam = null; $('dcStatus').textContent = settings.dashcam ? 'Starts with the camera' : 'Off'; }
 
@@ -1301,7 +1304,7 @@ const bindDc = (id, key, after) => { const el = $(id); if (el.type === 'checkbox
   el.addEventListener('change', () => { settings[key] = el.type === 'checkbox' ? el.checked : el.value; saveSettings(); after?.(); }); };
 bindDc('dcOn', 'dashcam', () => { if (settings.dashcam && camOn) startDashcam(); else stopDashcam(); });
 bindDc('dcDays', 'dcDays', () => enforceRetention().then(renderClips));
-bindDc('dcQuality', 'dcQuality', () => { if (dashcam) { stopDashcam(); startDashcam(); } });
+bindDc('dcQuality', 'dcQuality', async () => { if (camOn) { await setCamera(false); await setCamera(true); } });
 $('dcStatus').textContent = settings.dashcam ? 'Starts with the camera' : 'Off';
 
 // ---------------- capability check (real, per device) ----------------

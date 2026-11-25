@@ -95,8 +95,8 @@ Limits:
 **Wrong-side → Start camera** with **Dashcam** on (the default) records the road continuously.
 - **Files:** 1-minute files named `RideLens_YYYY-MM-DD_HH-MM-SS.mp4`. They're MP4 on iPhone Safari and recent Chrome; Firefox can only make `.webm`.
 - **Stamp:** every frame shows date, time, speed and GPS.
-- **Retention:** recordings are kept for 1, 3 or 7 days (your choice), then overwritten. The oldest are also removed early if the browser's storage allowance runs low.
-- **Quality and space:** 480p is about 0.5 GB/hour, 720p about 1.1 GB/hour (default), 1080p about 2 GB/hour. These are estimates from the bitrates used.
+- **Retention:** recordings are kept for 1, 3, 5 (default) or 7 days, then overwritten. The oldest are also removed early if the browser's storage allowance runs low.
+- **Quality and space:** 480p is about 0.5 GB/hour, 720p about 1.1 GB/hour, 1080p about 2 GB/hour, and 4K (default) about 7 GB/hour. These are estimates from the bitrates used. 4K is requested from the camera, and the card shows the resolution actually delivered: phone browsers often give web pages no more than 1080p.
 - **Incidents** lock the footage from 30 s before to 30 s after, and those clips are never overwritten. Triggers:
   - crash-level impact (≥ 4 g);
   - the bike lying on its side for 1.5 s;
