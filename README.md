@@ -75,6 +75,30 @@ The Trip card shows:
   - **Waze and Google Maps do not let other apps read their live ETA**, so their numbers can't appear inside RideLens.
   - Opening either app sends RideLens to the background, where browsers pause its sensors.
 
+## Hands-free wrong-side detection
+Turn on the camera in **Wrong-side** with the phone facing the road. With **Hands-free** ticked (the default), RideLens watches by itself.
+
+How a vehicle gets flagged:
+- **Detection**: about 2 checks per second, alternating the full frame with a 2× zoom on the centre of the road. A lightweight COCO-SSD detector runs in the browser.
+- **Distance**: estimated from the vehicle's apparent width and a typical real width for its class.
+- **Speed**: the vehicle's own speed toward you is its closing speed minus your GPS speed. That way traffic you're catching up to, and parked vehicles, don't count.
+- **Lane**: worked out from its sideways offset in metres. With keep-left traffic, which you set in Setup, a vehicle approaching at or left of your line is on the wrong side.
+- **Trigger**: when such a vehicle is within 30 m, RideLens saves the photo burst, including the 4 s before. It then reads vehicle type, colour, rider and number plate automatically, and the report is tagged **AUTO** with the measurements behind it.
+
+Limits:
+- **Estimates only.** Every number is an estimate. Review reports before sharing them.
+- **Only on screen.** The camera works only while RideLens is on screen.
+- **Detection range** depends on the phone's speed. In CI-like headless Chromium without a GPU, a car was first detected at about 15 m.
+- **No real-road testing.** The decision logic is tested on synthetic geometry, plus an end-to-end browser test with a real car photo approaching in the frame. It has not been validated on real roads.
+
+## Music while riding
+The Live screen has **Spotify / YouTube Music / Apple Music** buttons. Start your music, then return to RideLens: those apps keep playing in the background while RideLens stays in front and keeps recording. The camera doesn't use the microphone. The optional ambient-noise meter does, and on iPhone it may pause music.
+
+## Background running: what's possible
+- **In the web app**: browsers stop sensors, GPS and the camera for pages that aren't on screen, and no website can override that. RideLens keeps the screen awake. If you switch away mid-ride, the ride report logs a **Recording paused** event with its exact duration instead of inventing data for the gap.
+- **iPhone, even as a native app**: iOS allows background GPS, but never background camera use.
+- **Android native app**: a foreground service could keep GPS, sensors and the camera running behind other apps.
+
 ## What gets measured, and from which sensor
 
 | Metric | Source | How |

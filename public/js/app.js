@@ -1,6 +1,7 @@
 import { airCategory, airCell } from './air-quality.js';
 import { setupEvidenceLocation } from './evidence-location.js';
 import { analyzeEvidence, loadDetector, readPlateCrop } from './evidence-analysis.js';
+import { startAutoWatch } from './wrongside-watch.js';
 import { createAnalyzer, comfortClass, comfortLegend } from './analytics.js';
 import { Elm327, bleTransport, wsTransport } from './obd.js';
 import { requestMotionPermission, startMotion, startGps, keepAwake } from './sensors.js';
@@ -14,7 +15,7 @@ const G = 9.80665;
 
 // ---------------- settings ----------------
 const settings = (() => {
-  const def = { protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: '' };
+  const def = { protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: '', keepSide: 'left', autoWatch: true };
   try {
     const v = { ...def, ...JSON.parse(localStorage.getItem('ridelens.settings') || '{}') };
     if (typeof v.invertYaw === 'boolean') v.invertYaw = v.invertYaw ? 'invert' : ''; // migrate old checkbox
@@ -47,6 +48,7 @@ function toast(msg, ms = 2600) {
 let currentView = 'live';
 function show(view) {
   currentView = view;
+  const tq = document.getElementById('tripQuick'); if (tq) tq.hidden = view !== 'live'; // trip pill only on Live
   document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${view}`));
   document.querySelectorAll('.tabbar button').forEach((b) => {
     const active = b.dataset.view === view;
@@ -106,6 +108,7 @@ const EV = {
   coast: { icon: 'C', status: 'warning', title: 'Clutch-in coasting' },
   overheat: { icon: 'T', status: 'critical', title: 'Engine overheating' },
   wrongside: { icon: 'W', status: 'critical', title: 'Wrong-side vehicle reported' },
+  gap: { icon: '⏸', status: 'warning', title: 'Recording paused (RideLens not on screen)' },
 };
 const statusColor = (st) => getComputedStyle(document.documentElement).getPropertyValue(`--status-${st === 'info' ? 'good' : st}`).trim();
 
@@ -116,6 +119,8 @@ function describe(ev) {
     case 'shift': return `${ev.kind}${ev.from ? ` ${ev.from}→${ev.to}` : ` into ${ev.to}`} · clutch ${ev.durationMs} ms`;
     case 'coast': return `${(ev.durationMs / 1000).toFixed(1)} s without drive`;
     case 'overheat': return `coolant ${fmtTemp(ev.coolant)}`;
+    case 'gap': return `no sensor data for ${fmtDur(ev.durationMs)}: the browser pauses sensors while another app is in front or the screen is off`;
+    case 'wrongside': return ev.auto ? `auto-detected ${ev.auto.type?.toLowerCase() || 'vehicle'} · ~${ev.auto.distanceM} m away, closing ${ev.auto.closingKmh} km/h` : 'captured manually';
     default: return '';
   }
 }
@@ -369,6 +374,7 @@ bind('bridgeUrl', 'bridgeUrl', 'input');
 bind('serverUrl', 'serverUrl', 'input');
 bind('serverToken', 'serverToken', 'input');
 bind('units', 'units');
+bind('keepSide', 'keepSide', 'change', () => { if (autoStop) { stopAuto(); startAuto(); } });
 bind('theme', 'theme', 'change', applyTheme);
 bind('invertYaw', 'invertYaw', 'change', () => toast('Applies from the next ride'));
 $('testServer').addEventListener('click', async () => {
@@ -614,6 +620,7 @@ async function setCamera(on) {
     camOn = on;
     evidenceLocation.camera(on);
     if (on) loadDetector().catch(() => {});
+    if (on && settings.autoWatch) startAuto(); else stopAuto();
     $('camOff').hidden = on; $('captureBtn').disabled = !on;
     $('camToggle').textContent = on ? 'Stop camera' : 'Start camera';
   } catch (e) { camera.stop(); toast(`Camera: ${e.message}`, 4000); }
@@ -621,7 +628,7 @@ async function setCamera(on) {
 }
 $('camToggle').addEventListener('click', () => setCamera(!camOn));
 
-async function capture() {
+async function capture(detection = null) {
   const fab = $('fab');
   if (fab.classList.contains('busy')) return;
   fab.classList.add('busy');
@@ -637,12 +644,17 @@ async function capture() {
     if (!frames.length) throw new Error('No frames captured');
     const airQuality = fix && air?.cell === airCell(fix) && Math.abs(air.time - capturedAt) <= 90 * 60000 ? air : null;
     const speed = associatedRide && snap.speedSrc !== 'none' ? snap.speedKmh : null;
-    const rep = await saveReport({ frames, snapshot: { fix, speedKmh: speed }, rideId: associatedRide, capturedAt, airQuality });
+    let rep = await saveReport({ frames, snapshot: { fix, speedKmh: speed }, rideId: associatedRide, capturedAt, airQuality });
+    if (detection) {
+      // hands-free trigger: keep the measurements that caused it, pre-fill the vehicle type
+      rep = await db.updateReport(rep.id, (r) => ({ ...r, auto: detection, vehicleType: r.vehicleType || detection.type, notes: r.notes || `Auto-detected: ${detection.type} ~${detection.distanceM} m away, closing ${detection.closingKmh} km/h in your lane.` })) || rep;
+    }
     if (recording && rideId === associatedRide) {
-      const ev = { id: rep.id, type: 'wrongside', t: rep.t, lat: rep.lat, lon: rep.lon, speedKmh: speed, severity: 'severe' };
+      const ev = { id: rep.id, type: 'wrongside', t: rep.t, lat: rep.lat, lon: rep.lon, speedKmh: speed, severity: 'severe', auto: detection || undefined };
       analyzer.events.push(ev); onEvent(ev);
     }
-    toast(`Saved ${frames.length} photos · analysing vehicle and plate`);
+    toast(detection ? `Wrong-side ${detection.type.toLowerCase()} detected · ${frames.length} photos saved` : `Saved ${frames.length} photos · analysing vehicle and plate`);
+    if (detection) navigator.vibrate?.([80, 60, 80]);
     if (currentView === 'wrongside') renderReports();
     analysisQueue = analysisQueue.then(async () => {
       let timer;
@@ -657,8 +669,8 @@ async function capture() {
 
   } catch (e) { toast(e.message, 4000); } finally { fab.classList.remove('busy'); }
 }
-$('fab').addEventListener('click', capture);
-$('captureBtn').addEventListener('click', capture);
+$('fab').addEventListener('click', () => capture());
+$('captureBtn').addEventListener('click', () => capture());
 document.addEventListener('keydown', (e) => {
   if (e.defaultPrevented || e.repeat || $('reportDialog').open) return;
   const active = document.activeElement;
@@ -668,6 +680,50 @@ document.addEventListener('keydown', (e) => {
   if (mediaKey || (activationKey && !active?.closest('button, a[href], summary, [role="button"]'))) {
     e.preventDefault();
     capture();
+  }
+});
+
+// ---------------- hands-free wrong-side detection ----------------
+let autoStop = null;
+function startAuto() {
+  if (autoStop || !camOn) return;
+  $('autoStatus').textContent = 'Loading vehicle detector…';
+  autoStop = startAutoWatch({
+    video: $('camVideo'), overlay: $('camOverlay'), loadDetector, keep: settings.keepSide || 'left',
+    getOwnSpeedKmh: () => { const sn = analyzer.snapshot(); return sn.speedSrc !== 'none' && Date.now() - (sn.fix?.t ?? 0) < 5000 ? sn.speedKmh : null; },
+    onAlert: (d) => {
+      const detection = { type: d.type, vehicleClass: d.vehicleClass, distanceM: d.distanceM, lateralM: d.lateralM, closingKmh: d.closingKmh,
+        oncomingKmh: d.oncomingKmh, ownSpeedKmh: d.ownSpeedKmh, score: d.score, sightings: d.sightings, keep: settings.keepSide || 'left',
+        box: d.box.map((v, i) => +(v / (i % 2 ? d.frameH : d.frameW)).toFixed(4)) };
+      capture(detection);
+    },
+    onStatus: (st) => {
+      window.__autoWatchStatus = st; // for diagnostics/tests
+      $('autoStatus').textContent = st.error ? st.error
+        : `Watching the road · ${st.fps.toFixed(1)} checks/s · ${st.vehicles} vehicle${st.vehicles === 1 ? '' : 's'} in view`;
+    },
+  });
+}
+function stopAuto() { autoStop?.(); autoStop = null; $('autoStatus').textContent = camOn ? 'Off. Use the capture button, or turn this on.' : 'Starts with the camera.'; }
+$('autoWatch').checked = settings.autoWatch !== false;
+$('autoWatch').addEventListener('change', (e) => {
+  settings.autoWatch = e.target.checked; saveSettings();
+  if (e.target.checked) startAuto(); else stopAuto();
+});
+
+// ---------------- background: record honest gaps ----------------
+// Browsers stop sensors, GPS and camera for pages that are not on screen; nothing in a web
+// page can prevent that. Log each gap so reports never present it as continuous data.
+let hiddenAt = null;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { hiddenAt = Date.now(); return; }
+  if (hiddenAt == null) return;
+  const durationMs = Date.now() - hiddenAt;
+  const start = hiddenAt; hiddenAt = null;
+  if (recording && durationMs > 2000) {
+    const ev = { id: `gap-${start}`, type: 'gap', t: start, durationMs, severity: 'minor', lat: analyzer.snapshot().fix?.lat ?? null, lon: analyzer.snapshot().fix?.lon ?? null };
+    analyzer.events.push(ev); onEvent(ev);
+    setBanner(`Recording was paused for ${fmtDur(durationMs)} while RideLens was not on screen. Keep it in front during the ride: music apps can keep playing behind it.`);
   }
 });
 
@@ -687,7 +743,7 @@ async function renderReports() {
   $('wsList').innerHTML = reps.length ? reps.map((r) => `
     <div class="item" data-id="${r.id}" role="button" tabindex="0">
       <img src="${thumb(r)}" alt="">
-      <span>${r.plate ? `<span class="plate-tag">${esc(r.plate)}</span>` : '<span class="plate-tag none">NO PLATE</span>'} ${plates.get(r.plate) > 1 ? `<span class="status-pill critical">×${plates.get(r.plate)}</span>` : ''}<br>
+      <span>${r.auto ? '<span class="tag-auto">AUTO</span> ' : ''}${r.plate ? `<span class="plate-tag">${esc(r.plate)}</span>` : '<span class="plate-tag none">NO PLATE</span>'} ${plates.get(r.plate) > 1 ? `<span class="status-pill critical">×${plates.get(r.plate)}</span>` : ''}<br>
       <span class="muted">${esc(r.vehicleType || 'Vehicle')} · ${new Date(r.t).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · ${esc(r.status)}${r.synced ? ' · synced' : ''}</span></span>
       <span class="muted">${r.photos.length} 📷</span>
     </div>`).join('') : '<p class="empty">No reports yet. Tap the red camera button when a vehicle comes at you on the wrong side.</p>';

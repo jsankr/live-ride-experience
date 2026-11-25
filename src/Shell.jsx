@@ -39,6 +39,15 @@ export function Shell() {
           <p className="fine" id="tripSource"></p>
         </div>
       </article>
+      <article className="card music-card" id="musicCard">
+        <div className="card-head"><h3>Music</h3></div>
+        <div className="row music-row">
+          <a className="btn music spotify" id="musicSpotify" href="https://open.spotify.com/" target="_blank" rel="noopener">Spotify</a>
+          <a className="btn music ytm" id="musicYtm" href="https://music.youtube.com/" target="_blank" rel="noopener">YouTube Music</a>
+          <a className="btn music apple" id="musicApple" href="https://music.apple.com/" target="_blank" rel="noopener">Apple Music</a>
+        </div>
+        <p className="fine">Start your music, then come back to RideLens. The music app keeps playing in the background while RideLens stays on screen and keeps recording. RideLens's camera does not use the microphone. The optional Ambient noise meter does, and on iPhone it may pause your music while it's on.</p>
+      </article>
       <div className="grid live-grid" id="rideDetails" hidden>
         <article className="card hero">
           <svg className="dial" viewBox="0 0 220 220" aria-hidden="true">
@@ -117,9 +126,11 @@ export function Shell() {
       <div className="grid ws-grid">
         <article className="card cam-card">
           <div className="card-head"><h3>Evidence camera</h3><button className="ghost" id="camToggle">Start camera</button></div>
-          <div className="cam"><video id="camVideo" playsInline muted></video><div className="cam-off" id="camOff">Camera off. Turn it on before you ride: it keeps a 4-second pre-roll so the vehicle is captured even after it has passed.</div></div>
+          <div className="cam"><video id="camVideo" playsInline muted></video><canvas id="camOverlay" className="cam-overlay" aria-hidden="true"></canvas><div className="cam-off" id="camOff">Camera off. Start it before you ride and point the phone at the road ahead. RideLens then watches on its own: no tapping while riding.</div></div>
+          <label className="check auto-row"><input type="checkbox" id="autoWatch" defaultChecked /> <span><b>Hands-free: auto-detect wrong-side vehicles</b><br /><span className="muted" id="autoStatus">Starts with the camera.</span></span></label>
+          <p className="fine">When a vehicle comes toward you in your lane, RideLens saves a photo burst (including the 4 s before), then reads the vehicle type, colour, rider and number plate by itself. Detections are estimates from the camera image. Review them before sharing. The camera only works while RideLens is on screen.</p>
           <button className="capture" id="captureBtn" disabled>Capture wrong-side vehicle</button>
-          <p className="fine">Shortcut: a Bluetooth remote or keyboard sending <kbd>Enter</kbd>/<kbd>Space</kbd> triggers capture. Keep your eyes on the road: capture is one tap, and you can add details after you stop.</p>
+          <p className="fine">Optional shortcut: a Bluetooth remote sending <kbd>Enter</kbd>/<kbd>Space</kbd> also captures.</p>
         </article>
         <article className="card">
           <div className="card-head"><h3>Reports</h3>
@@ -168,6 +179,7 @@ export function Shell() {
           <label>Lean left/right direction
             <select id="invertYaw"><option value="">Automatic (learned from GPS turns)</option><option value="normal">Force normal</option><option value="invert">Force inverted</option></select>
           </label>
+          <label>Traffic drives on the <select id="keepSide"><option value="left">left (India, UK, Australia…)</option><option value="right">right (USA, Europe…)</option></select></label>
           <label>Units <select id="units"><option value="metric">km/h, °C, m</option><option value="imperial">mph, °F, ft</option></select></label>
           <label>Theme <select id="theme"><option value="">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
         </article>
