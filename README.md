@@ -91,6 +91,18 @@ Limits:
 - **Detection range** depends on the phone's speed. In CI-like headless Chromium without a GPU, a car was first detected at about 15 m.
 - **No real-road testing.** The decision logic is tested on synthetic geometry, plus an end-to-end browser test with a real car photo approaching in the frame. It has not been validated on real roads.
 
+## Potholes, speed breakers and rough stretches
+Road events are judged against the vibration of the road you are on *right now*. A jolt must be 4× the running background (and ≥ 0.5 g), so a rough road or a shaky handlebar mount doesn't turn every bump into an event.
+- **Pothole**: the wheel **drops first** (a dip of at least 0.35 g before the biggest compression), then slams.
+- **Speed breaker**: **compression first**, lasting at least 80 ms, after you slowed by ≥ 4 km/h (or below 20 km/h).
+- **Rear-wheel confirmation**: both must repeat when the rear wheel reaches the same spot, one wheelbase later (1.45 m, about a T120). Random jolts don't repeat on cue.
+- **Rough stretch**: three or more unexplained jolts within 10 s are logged as one stretch (start, end, length, peak), drawn as a line on the map. They're not counted as potholes. Inside a rough stretch, a pothole must also hit 1.25× harder than the jolts around it.
+- **No double counting**: at most one event per 10 m.
+
+On simulated rides: smooth roads count potholes and breakers within ±1. Rough roads with 300–460 random jolts per ride keep potholes within ±25%, never over-count breakers, and find rough stretches within ±40%. **These are simulations, not real roads.** Turn on *Keep raw sensor data* in Setup to re-analyse rides later, and to share real data for tuning.
+
+**Maps:** the ride report map filters All / Potholes / Breakers / Rough. *History → Road hazard map* merges potholes and breakers from all rides (within 15 m), marks spots hit on more than one ride, lists the worst with Google Maps links, and exports GeoJSON/CSV.
+
 ## Dashcam
 **Wrong-side → Start camera** with **Dashcam** on (the default) records the road continuously.
 - **Files:** 1-minute files named `RideLens_YYYY-MM-DD_HH-MM-SS.mp4`. They're MP4 on iPhone Safari and recent Chrome; Firefox can only make `.webm`.
