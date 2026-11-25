@@ -16,7 +16,7 @@ function rng(seed) { // mulberry32
   };
 }
 
-export function createSimulator({ seed = 7, startLat = 12.9716, startLon = 77.5946, mountTiltDeg = 25, onImu, onGps, onObd } = {}) {
+export function createSimulator({ seed = 7, startLat = 12.9716, startLon = 77.5946, mountTiltDeg = 25, roughRoads = false, onImu, onGps, onObd } = {}) {
   const rand = rng(seed);
   const gauss = () => { // Box-Muller
     let u = 0, v = 0; while (!u) u = rand(); while (!v) v = rand();
@@ -42,11 +42,11 @@ export function createSimulator({ seed = 7, startLat = 12.9716, startLon = 77.59
     heading: 30, yaw: 0, yawUntil: 0, lean: 0,
     lat: startLat, lon: startLon, alt: 920,
     target: 0, targetUntil: 0, hardBrakeUntil: 0,
-    impacts: [], nextImpact: 0,
+    impacts: [], nextImpact: 0, bumpAt: 0, jolts: [], nextJolt: 0, roughStretch: false,
     roughness: 0.4, roughUntil: 0,
     lastGps: 0, lastObd: 0, lastSlow: 0, coolant: 70,
   };
-  const truth = { potholes: 0, bumps: 0, hardBrakes: 0, shifts: 0, upshifts: 0, downshifts: 0, shiftMs: [], maxLean: 0 };
+  const truth = { potholes: 0, bumps: 0, roughStretches: 0, roughJolts: 0, hardBrakes: 0, shifts: 0, upshifts: 0, downshifts: 0, shiftMs: [], maxLean: 0 };
 
   function plan() {
     const opts = [25, 35, 45, 55, 65, 75, 85, 40, 30, 0];
@@ -63,7 +63,16 @@ export function createSimulator({ seed = 7, startLat = 12.9716, startLon = 77.59
     st.t += dt * 1000;
     const t = st.t;
     if (t > st.targetUntil) plan();
-    if (t > st.roughUntil) { st.roughness = 0.2 + rand() * 0.9; st.roughUntil = t + 8000 + rand() * 12000; }
+    if (t > st.roughUntil) {
+      // optional broken-surface stretches: heavy vibration plus frequent small jolts that are
+      // NOT potholes or speed breakers (what a handlebar-mounted phone sees on bad roads)
+      st.roughStretch = roughRoads && rand() < 0.4;
+      if (st.roughStretch) truth.roughStretches++;
+      st.roughness = st.roughStretch ? 1.4 + rand() * 0.8 : 0.2 + rand() * 0.9;
+      st.roughUntil = t + (st.roughStretch ? 25000 + rand() * 20000 : 8000 + rand() * 12000);
+    }
+    // a speed breaker ahead: the rider slows to ~15 km/h first (as riders do)
+    if (st.bumpAt && t < st.bumpAt) { st.target = Math.min(st.target, 15 / 3.6); st.targetUntil = Math.max(st.targetUntil, st.bumpAt + 1500); }
 
     // --- longitudinal dynamics
     let a;
@@ -113,17 +122,33 @@ export function createSimulator({ seed = 7, startLat = 12.9716, startLon = 77.59
     st.alt += Math.sin(t / 60000) * st.v * dt * 0.03;
 
     // --- road impacts
-    if (st.v > 5 && t > st.nextImpact) {
-      const kind = rand() < 0.7 ? 'pothole' : 'bump';
-      const sev = 0.8 + rand() * 0.9;
-      st.impacts.push({ t0: t, kind, sev });
-      truth[kind === 'pothole' ? 'potholes' : 'bumps']++;
+    const WHEELBASE = 1.45; // m: the rear wheel hits the same spot L/v later
+    if (st.v > 5 && t > st.nextImpact && !st.bumpAt) {
+      if (rand() < 0.7) {
+        const sev = 1.0 + rand() * 0.8;
+        st.impacts.push({ t0: t, kind: 'pothole', sev }, { t0: t + (WHEELBASE / st.v) * 1000, kind: 'pothole', sev: sev * 0.7 });
+        truth.potholes++;
+      } else st.bumpAt = t + 6000; // breaker spotted ahead
       st.nextImpact = t + 9000 + rand() * 18000;
     }
+    if (st.bumpAt && t >= st.bumpAt) {
+      const sev = 0.8 + rand() * 0.6;
+      st.impacts.push({ t0: t, kind: 'bump', sev }, { t0: t + (WHEELBASE / Math.max(st.v, 1)) * 1000, kind: 'bump', sev: sev * 0.7 });
+      truth.bumps++; st.bumpAt = 0;
+    }
+    if (st.roughStretch && st.v > 3 && t > st.nextJolt) {
+      const sign = rand() < 0.5 ? -1 : 1;
+      st.jolts.push({ t0: t, a: sign * (0.5 + rand() * 0.6) * G, dur: 30 + rand() * 30 });
+      truth.roughJolts++;
+      st.nextJolt = t + 400 + rand() * 1600;
+    }
     let zImp = 0;
-    st.impacts = st.impacts.filter((im) => t - im.t0 < 400);
+    st.jolts = st.jolts.filter((j) => t - j.t0 < j.dur);
+    for (const j of st.jolts) if (t >= j.t0) zImp += j.a;
+    st.impacts = st.impacts.filter((im) => t - im.t0 < 400 || im.t0 > t);
     for (const im of st.impacts) {
       const e = t - im.t0;
+      if (e < 0) continue;
       if (im.kind === 'pothole') {
         if (e < 60) zImp += -0.75 * G * im.sev;
         else if (e < 140) zImp += 1.5 * G * im.sev;

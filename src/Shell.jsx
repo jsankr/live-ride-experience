@@ -127,6 +127,13 @@ export function Shell() {
 
     <section id="view-history" className="view" aria-label="History">
       <div className="section-head"><h2>Ride history</h2><button className="ghost" id="importBtn">Import JSON</button><input type="file" id="importFile" accept="application/json" hidden /></div>
+      <article className="card hazard-card" id="hazardCard">
+        <div className="card-head"><h3>Road hazard map · all rides</h3><span className="actions"><button className="ghost" id="hzGeo">GeoJSON</button><button className="ghost" id="hzCsv">CSV</button></span></div>
+        <div id="hazardMap" className="map" style={{ minHeight: 320 }}></div>
+        <p className="fine" id="hzSummary"></p>
+        <ol className="hz-list" id="hzList"></ol>
+        <p className="fine">Potholes and speed breakers from every saved ride, merged when they are within 15 m. A spot hit on several rides is more certain. Export GeoJSON or CSV (with Google Maps links) to attach to a municipal complaint.</p>
+      </article>
       <div id="historyList" className="list"></div>
     </section>
 
@@ -200,6 +207,7 @@ export function Shell() {
             <select id="invertYaw"><option value="">Automatic (learned from GPS turns)</option><option value="normal">Force normal</option><option value="invert">Force inverted</option></select>
           </label>
           <label>Traffic drives on the <select id="keepSide"><option value="left">left (India, UK, Australia…)</option><option value="right">right (USA, Europe…)</option></select></label>
+          <label className="check"><input type="checkbox" id="rawLog" /> <span>Keep raw sensor data with each ride (about 10 MB per hour). Lets a ride be re-analysed later when detection improves, and helps tune pothole detection for your bike.</span></label>
           <label>Units <select id="units"><option value="metric">km/h, °C, m</option><option value="imperial">mph, °F, ft</option></select></label>
           <label>Theme <select id="theme"><option value="">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
         </article>

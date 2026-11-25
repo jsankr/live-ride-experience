@@ -1,9 +1,9 @@
 // Offline shell: the app keeps working on roads with no signal.
 const CACHE_PREFIX = `ridelens:${self.registration.scope}:`;
-const CACHE = `${CACHE_PREFIX}v14`;
+const CACHE = `${CACHE_PREFIX}v15`;
 const SHELL = ['./', 'index.html', 'styles.css', 'cockpit.css', 'js/cockpit.js', 'leaflet/leaflet.css',
   'leaflet/images/layers.png', 'leaflet/images/layers-2x.png', 'leaflet/images/marker-icon.png', 'leaflet/images/marker-icon-2x.png', 'leaflet/images/marker-shadow.png', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
-  'js/app.js', 'js/analytics.js', 'js/obd.js', 'js/sensors.js', 'js/charts.js', 'js/db.js', 'js/reports.js', 'js/air-quality.js', 'js/evidence-location.js', 'js/evidence-analysis.js', 'js/trip.js', 'js/wrongside-watch.js', 'js/ytplayer.js', 'js/dashcam.js'];
+  'js/app.js', 'js/analytics.js', 'js/obd.js', 'js/sensors.js', 'js/charts.js', 'js/db.js', 'js/reports.js', 'js/air-quality.js', 'js/evidence-location.js', 'js/evidence-analysis.js', 'js/trip.js', 'js/wrongside-watch.js', 'js/ytplayer.js', 'js/dashcam.js', 'js/hazards.js'];
 self.addEventListener('install', (e) => e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())));
 self.addEventListener('activate', (e) => e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k.startsWith(CACHE_PREFIX) && k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', (e) => {

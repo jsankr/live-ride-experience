@@ -4,6 +4,7 @@ import { analyzeEvidence, loadDetector, readPlateCrop } from './evidence-analysi
 import { startAutoWatch } from './wrongside-watch.js';
 import { createYouTubePlayer, parseYouTubeLink } from './ytplayer.js';
 import { Dashcam, fileName, retention, overlapping, stamp } from './dashcam.js';
+import { mergeHazards, hazardsGeoJson, hazardsCsv } from './hazards.js';
 import { createAnalyzer, comfortClass, comfortLegend } from './analytics.js';
 import { Elm327, bleTransport, wsTransport } from './obd.js';
 import { requestMotionPermission, startMotion, startGps, keepAwake } from './sensors.js';
@@ -17,7 +18,7 @@ const G = 9.80665;
 
 // ---------------- settings ----------------
 const settings = (() => {
-  const def = { protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: '', keepSide: 'left', autoWatch: true, ytLink: '', dashcam: true, dcDays: '5', dcQuality: '2160', w3wKey: '' };
+  const def = { protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: '', keepSide: 'left', autoWatch: true, ytLink: '', dashcam: true, dcDays: '5', dcQuality: '2160', w3wKey: '', rawLog: false };
   try {
     const v = { ...def, ...JSON.parse(localStorage.getItem('ridelens.settings') || '{}') };
     if (typeof v.invertYaw === 'boolean') v.invertYaw = v.invertYaw ? 'invert' : ''; // migrate old checkbox
@@ -106,7 +107,8 @@ const liveLayer = liveMap ? L.layerGroup().addTo(liveMap) : null;
 
 const EV = {
   pothole: { icon: 'P', status: 'serious', title: 'Pothole' },
-  bump: { icon: 'B', status: 'warning', title: 'Speed bump / ridge' },
+  bump: { icon: 'B', status: 'warning', title: 'Speed breaker' },
+  rough: { icon: 'R', status: 'warning', title: 'Rough stretch' },
   brake: { icon: '!', status: 'critical', title: 'Hard braking' },
   accel: { icon: 'A', status: 'warning', title: 'Hard acceleration' },
   shift: { icon: 'S', status: 'info', title: 'Gear change' },
@@ -122,6 +124,7 @@ const statusColor = (st) => getComputedStyle(document.documentElement).getProper
 function describe(ev) {
   switch (ev.type) {
     case 'pothole': case 'bump': return `${ev.severity} · ${ev.p2pG} g peak-to-peak at ${fmtSpeed(ev.speedKmh)} ${speedUnit()}`;
+    case 'rough': return `${ev.lengthM != null ? `${ev.lengthM} m, ` : ''}${ev.jolts} jolts, up to ${ev.peakG} g, over ${fmtDur((ev.endT ?? ev.t) - ev.t)}`;
     case 'brake': case 'accel': return `${ev.peakG} g · ${fmtSpeed(ev.fromKmh)}→${fmtSpeed(ev.toKmh)} ${speedUnit()} in ${(ev.durationMs / 1000).toFixed(1)} s`;
     case 'shift': return `${ev.kind}${ev.from ? ` ${ev.from}→${ev.to}` : ` into ${ev.to}`} · clutch ${ev.durationMs} ms`;
     case 'coast': return `${(ev.durationMs / 1000).toFixed(1)} s without drive`;
@@ -154,7 +157,12 @@ function onEvent(ev) {
 }
 
 // ---------------- sensor plumbing ----------------
-const feedImu = (t, a, g) => { lastSeen.imu = Date.now(); analyzer.pushImu(t, a, g); };
+let rawImu = null; // optional raw log: [dt ms, ax, ay, az, gx, gy, gz] (2 decimals)
+const r2 = (x) => (x == null ? null : Math.round(x * 100) / 100);
+const feedImu = (t, a, g) => {
+  lastSeen.imu = Date.now(); analyzer.pushImu(t, a, g);
+  if (rawImu && recording) rawImu.push([t - rawImu.t0, r2(a.x), r2(a.y), r2(a.z), r2(g?.x), r2(g?.y), r2(g?.z)]);
+};
 const feedGps = (t, f) => { lastSeen.gps = Date.now(); analyzer.pushGps(t, f); };
 const feedObd = (t, d) => { lastSeen.obd = Date.now(); analyzer.pushObd(t, d); };
 
@@ -173,6 +181,7 @@ async function startRide() {
   resetLive();
   rideId = uid();
   recording = true;
+  rawImu = settings.rawLog ? Object.assign([], { t0: Date.now() }) : null;
   $('recBtn').setAttribute('aria-pressed', 'true');
   $('recLabel').textContent = 'Stop';
   keepAwake(true);
@@ -214,6 +223,7 @@ async function stopRide() {
 function packRide(id, an) {
   return {
     id, savedAt: Date.now(),
+    ...(rawImu?.length ? { raw: { v: 1, t0: rawImu.t0, imu: rawImu } } : {}),
     summary: an.summary(), events: an.events, track: an.track, timeline: an.timeline,
     gears: an.gears,
   };
@@ -384,6 +394,7 @@ bind('bridgeUrl', 'bridgeUrl', 'input');
 bind('serverUrl', 'serverUrl', 'input');
 bind('serverToken', 'serverToken', 'input');
 bind('units', 'units');
+bind('rawLog', 'rawLog');
 bind('keepSide', 'keepSide', 'change', () => { if (autoStop) { stopAuto(); startAuto(); } });
 bind('w3wKey', 'w3wKey', 'input');
 bind('theme', 'theme', 'change', applyTheme);
@@ -427,8 +438,8 @@ window.addEventListener('resize', () => {
 // Report map pins: events closer than ~44 px on screen merge into one bubble
 // (count, coloured by its most severe event); tapping a bubble zooms into it.
 const SEVERITY = ['info', 'good', 'warning', 'serious', 'critical'];
-function clusterEvents(map, events) {
-  const layer = L.layerGroup().addTo(map);
+function clusterEvents(map, events, target) {
+  const layer = target || L.layerGroup().addTo(map);
   const draw = () => {
     layer.clearLayers();
     const cells = new Map();
@@ -458,6 +469,47 @@ function clusterEvents(map, events) {
   draw();
 }
 
+// Report map: filter chips (All / Potholes / Speed breakers / Rough stretches). Potholes get
+// their own severity-coloured pins; rough stretches are drawn along the route.
+const HAZARD_STATUS = { minor: 'warning', moderate: 'serious', severe: 'critical' };
+function hazardPin(e) {
+  const st = e.type === 'pothole' ? HAZARD_STATUS[e.severity] || 'serious' : 'warning';
+  const label = e.type === 'pothole' ? 'P' : e.type === 'bump' ? 'B' : 'R';
+  return L.marker([e.lat, e.lon], { icon: L.divIcon({ className: '', html: `<div class="hz-pin ${st}">${label}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] }) })
+    .bindPopup(`<b>${(EV[e.type] || EV.bump).title}</b> · ${esc(e.severity || '')}<br>${esc(describe(e))}<br>${fmtClock(e.t)}<br><a href="https://maps.google.com/?q=${e.lat},${e.lon}" target="_blank" rel="noopener">${e.lat.toFixed(5)}, ${e.lon.toFixed(5)}</a>`);
+}
+function drawHazardLayers(map, ride) {
+  const roughLines = L.layerGroup(), pins = L.layerGroup(), other = L.layerGroup();
+  for (const e of ride.events.filter((x) => x.type === 'rough')) {
+    const seg = ride.track.filter((q) => q.t >= e.t - 1000 && q.t <= (e.endT ?? e.t) + 1000).map((q) => [q.lat, q.lon]);
+    if (seg.length > 1) L.polyline(seg, { color: statusColor(e.severity === 'serious' ? 'serious' : 'warning'), weight: 10, opacity: 0.55, dashArray: '2 10', lineCap: 'round' })
+      .bindPopup(`<b>Rough stretch</b><br>${esc(describe(e))}<br>${fmtClock(e.t)}`).addTo(roughLines);
+  }
+  const hz = ride.events.filter((x) => x.lat != null && (x.type === 'pothole' || x.type === 'bump'));
+  const otherEvents = ride.events.filter((x) => x.lat != null && !['shift', 'pothole', 'bump', 'rough'].includes(x.type));
+  const show = (f) => {
+    [roughLines, pins, other].forEach((l) => map.removeLayer(l));
+    pins.clearLayers();
+    hz.filter((e) => f === 'all' || f === e.type).forEach((e) => hazardPin(e).addTo(pins));
+    if (f === 'all' || f === 'rough') roughLines.addTo(map);
+    if (f !== 'rough') pins.addTo(map);
+    if (f === 'all') other.addTo(map);
+  };
+  if (otherEvents.length) clusterEvents(map, otherEvents, other);
+  const ctl = L.control({ position: 'topleft' });
+  ctl.onAdd = () => {
+    const d = L.DomUtil.create('div', 'hz-filter');
+    const n = (t) => ride.events.filter((e) => e.type === t).length;
+    d.innerHTML = [['all', 'All'], ['pothole', `Potholes ${n('pothole')}`], ['bump', `Breakers ${n('bump')}`], ['rough', `Rough ${n('rough')}`]]
+      .map(([k, l], i) => `<button type="button" data-f="${k}" class="${i ? '' : 'on'}">${l}</button>`).join('');
+    L.DomEvent.disableClickPropagation(d);
+    d.addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; d.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); show(b.dataset.f); });
+    return d;
+  };
+  ctl.addTo(map);
+  show('all');
+}
+
 function renderReport(ride) {
   const s = ride.summary;
   const [st, word] = SCORE_STATUS(s.scores.overall);
@@ -474,7 +526,7 @@ function renderReport(ride) {
         <h2>${new Date(s.startT).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</h2>
         <div class="muted"><span class="status-pill ${st}">${word}</span> · heuristic score · smoothness ${s.scores.smooth} · braking ${s.scores.braking} · shifting ${s.scores.shifting ?? '—'}</div>
       </div>
-      <span class="actions"><button class="ghost" data-x="json">JSON</button><button class="ghost" data-x="csv">CSV</button><button class="ghost" data-x="gpx">GPX</button></span>
+      <span class="actions"><button class="ghost" data-x="json">JSON</button><button class="ghost" data-x="csv">CSV</button><button class="ghost" data-x="gpx">GPX</button>${ride.raw ? '<button class="ghost" data-x="reanalyse">Re-analyse road</button>' : ''}</span>
     </div>
     <div class="stats">
       ${stat('Distance', fmtDist(s.distanceKm))}
@@ -535,7 +587,7 @@ function renderReport(ride) {
       const a = ride.track[i - 1], b = ride.track[i];
       L.polyline([[a.lat, a.lon], [b.lat, b.lon]], { color: statusColor(comfortClass(b.rough).status), weight: 5, opacity: 0.9 }).addTo(reportMap);
     }
-    clusterEvents(reportMap, ride.events.filter((e) => e.lat != null && e.type !== 'shift'));
+    drawHazardLayers(reportMap, ride);
     const legend = L.control({ position: 'bottomleft' });
     legend.onAdd = () => {
       const d = L.DomUtil.create('div', 'card'); d.style.padding = '8px 10px'; d.style.fontSize = '12px';
@@ -553,6 +605,7 @@ function renderReport(ride) {
   body.querySelector('.actions').addEventListener('click', (e) => {
     const x = e.target.dataset.x; if (!x) return;
     const name = `ride-${new Date(s.startT).toISOString().slice(0, 16).replace(/[:T]/g, '-')}`;
+    if (x === 'reanalyse') { reanalyseRoad(ride).catch((err) => toast(err.message, 4000)); return; }
     if (x === 'json') download(`${name}.json`, JSON.stringify(ride), 'application/json');
     if (x === 'csv') {
       const cols = ['t', 'v', 'long', 'lat', 'vert', 'jerk', 'lean', 'rpm', 'gear', 'clutch', 'thr', 'cool', 'alt'];
@@ -573,8 +626,60 @@ function download(name, text, type) {
 }
 
 // ---------------- history ----------------
+let hazardMap = null, hazardSpots = [];
+function renderHazards(rides) {
+  hazardSpots = mergeHazards(rides);
+  const pot = hazardSpots.filter((x) => x.type === 'pothole'), brk = hazardSpots.filter((x) => x.type === 'bump');
+  $('hzSummary').textContent = rides.length ? `${pot.length} pothole spots (${pot.filter((x) => x.rides > 1).length} seen on more than one ride) and ${brk.length} speed breakers across ${rides.length} rides.` : '';
+  $('hzList').innerHTML = pot.slice(0, 8).map((x) => `<li><span class="hz-pin ${HAZARD_STATUS[x.worst]}${x.rides > 1 ? ' seen' : ''}">P</span><span>${esc(x.worst)} pothole · hit ${x.hits}× on ${x.rides} ride${x.rides > 1 ? 's' : ''} · up to ${x.maxP2pG.toFixed(1)} g</span><a href="https://maps.google.com/?q=${x.lat},${x.lon}" target="_blank" rel="noopener">map</a></li>`).join('');
+  if (!L) return;
+  if (!hazardMap) hazardMap = makeMap('hazardMap');
+  setTimeout(() => hazardMap.invalidateSize(), 60);
+  hazardMap.eachLayer((l) => { if (l instanceof L.Marker || l instanceof L.CircleMarker) hazardMap.removeLayer(l); });
+  for (const x of hazardSpots) {
+    const st = x.type === 'pothole' ? HAZARD_STATUS[x.worst] : 'warning';
+    L.marker([x.lat, x.lon], { icon: L.divIcon({ className: '', html: `<div class="hz-pin ${st}${x.rides > 1 ? ' seen' : ''}">${x.type === 'pothole' ? 'P' : 'B'}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] }) })
+      .bindPopup(`<b>${x.type === 'pothole' ? 'Pothole' : 'Speed breaker'}</b> · ${esc(x.worst)}<br>hit ${x.hits}× on ${x.rides} ride(s), up to ${x.maxP2pG.toFixed(1)} g<br>last ${new Date(x.lastT).toLocaleDateString()}<br><a href="https://maps.google.com/?q=${x.lat},${x.lon}" target="_blank" rel="noopener">${x.lat}, ${x.lon}</a>`)
+      .addTo(hazardMap);
+  }
+  if (hazardSpots.length) hazardMap.fitBounds(L.latLngBounds(hazardSpots.map((x) => [x.lat, x.lon])), { padding: [24, 24], maxZoom: 16 });
+}
+$('hzGeo').addEventListener('click', () => download('road-hazards.geojson', JSON.stringify(hazardsGeoJson(hazardSpots), null, 1), 'application/geo+json'));
+$('hzCsv').addEventListener('click', () => download('road-hazards.csv', hazardsCsv(hazardSpots), 'text/csv'));
+
+// Replay a ride's raw IMU + recorded GPS track through the CURRENT detector and replace only
+// its road events (potholes, breakers, rough stretches). Needs 'Keep raw sensor data'.
+function reanalyseRoadEvents(ride) {
+  const an = createAnalyzer({ invertYaw: yawOpt() });
+  const track = ride.track || [];
+  const t0 = ride.raw.t0;
+  let k = 0;
+  for (const [dt, ax, ay, az, gx, gy, gz] of ride.raw.imu) {
+    const t = t0 + dt;
+    while (k < track.length && track[k].t <= t) {
+      const q = track[k++];
+      an.pushGps(q.t, { lat: q.lat, lon: q.lon, alt: q.alt, speed: q.v / 3.6, heading: null, accuracy: 5 });
+    }
+    an.pushImu(t, { x: ax, y: ay, z: az }, gx == null ? null : { x: gx, y: gy, z: gz });
+  }
+  const road = an.events.filter((e) => ['pothole', 'bump', 'rough'].includes(e.type));
+  const events = [...ride.events.filter((e) => !['pothole', 'bump', 'rough'].includes(e.type)), ...road].sort((a, b) => a.t - b.t);
+  const count = (tp) => road.filter((e) => e.type === tp).length;
+  return { ...ride, events, summary: { ...ride.summary, potholes: count('pothole'), bumps: count('bump'), roughStretches: count('rough') }, reanalysedAt: Date.now() };
+}
+async function reanalyseRoad(ride) {
+  toast('Re-analysing road events…');
+  await new Promise((r) => setTimeout(r, 30));
+  const before = `${ride.summary.potholes} potholes, ${ride.summary.bumps} breakers`;
+  const updated = reanalyseRoadEvents(ride);
+  await db.put('rides', updated);
+  renderReport(updated);
+  toast(`Was ${before} → now ${updated.summary.potholes} potholes, ${updated.summary.bumps} breakers, ${updated.summary.roughStretches} rough stretches`, 6000);
+}
+
 async function renderHistory() {
   const rides = (await db.all('rides')).sort((a, b) => b.summary.startT - a.summary.startT);
+  renderHazards(rides);
   const list = $('historyList');
   if (!rides.length) {
     list.innerHTML = '<div class="card"><p class="empty">No rides yet. Recorded rides appear here.</p></div>';

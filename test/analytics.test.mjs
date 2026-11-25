@@ -139,3 +139,28 @@ test('downsample keeps extremes and averages per bucket', async () => {
   assert.deepEqual(downsample([], 'v', 10), []);
   assert.equal(downsample([{ t: 0, v: null }, { t: 1, v: 2 }], 'v', 4).length, 1, 'null samples are skipped');
 });
+
+test('rough roads: jolts become rough stretches, not hundreds of potholes or breakers', () => {
+  for (const seed of [7, 21, 99]) {
+    const a = createAnalyzer();
+    const sm = createSimulator({ seed, roughRoads: true, onImu: (t, x, g) => a.pushImu(t, x, g), onGps: (t, f) => a.pushGps(t, f), onObd: (t, d) => a.pushObd(t, d) });
+    for (let i = 0; i < 900 * 50; i++) sm.step(0.02);
+    const c = (k) => a.events.filter((e) => e.type === k).length;
+    assert.ok(sm.truth.roughJolts > 300, 'scenario has hundreds of non-event jolts');
+    assert.ok(Math.abs(c('pothole') - sm.truth.potholes) <= Math.max(4, sm.truth.potholes * 0.25), `seed ${seed} potholes ${c('pothole')} vs ${sm.truth.potholes}`);
+    assert.ok(c('bump') <= sm.truth.bumps, `seed ${seed} breakers never over-counted: ${c('bump')} vs ${sm.truth.bumps}`);
+    assert.ok(Math.abs(c('rough') - sm.truth.roughStretches) <= Math.max(3, sm.truth.roughStretches * 0.4), `seed ${seed} rough ${c('rough')} vs ${sm.truth.roughStretches}`);
+  }
+});
+
+test('smooth roads: potholes and speed breakers counted exactly, no rough stretches', () => {
+  for (const seed of [7, 3, 5]) {
+    const a = createAnalyzer();
+    const sm = createSimulator({ seed, onImu: (t, x, g) => a.pushImu(t, x, g), onGps: (t, f) => a.pushGps(t, f), onObd: (t, d) => a.pushObd(t, d) });
+    for (let i = 0; i < 900 * 50; i++) sm.step(0.02);
+    const c = (k) => a.events.filter((e) => e.type === k).length;
+    assert.ok(Math.abs(c('pothole') - sm.truth.potholes) <= 1, `potholes ${c('pothole')} vs ${sm.truth.potholes}`);
+    assert.ok(Math.abs(c('bump') - sm.truth.bumps) <= 1, `breakers ${c('bump')} vs ${sm.truth.bumps}`);
+    assert.equal(c('rough'), 0);
+  }
+});

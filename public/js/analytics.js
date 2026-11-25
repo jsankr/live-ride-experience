@@ -25,10 +25,19 @@ export const DEFAULTS = {
   longTau: 0.15,            // s, smoothing for longitudinal accel
   jerkTau: 0.1,             // s, smoothing for jerk
   roughWindow: 2.0,         // s, RMS window for vertical vibration
-  potholeTrigger: 0.6 * G,  // |vertical| that triggers a road-impact event
-  potholeOnset: 0.3 * G,    // first excursion beyond this decides pothole vs bump
+  // Road impacts are judged against the CURRENT road's background vibration, so a rough
+  // road (or a shaky handlebar mount) does not turn every jolt into an event.
+  impactK: 4.0,             // a jolt must exceed this many times the background RMS...
+  impactMinG: 0.5,          // ...and this absolute level (g)
+  potholeDipG: 0.35,        // pothole: the wheel drops first, a dip at least this deep (g)...
+  bumpDecelKmh: 4,          // speed breaker: compression first, after slowing by this much...
+  bumpSlowKmh: 20,          // ...or when already this slow
   potholeMinSpeed: 3,       // m/s
-  potholeRefractory: 800,   // ms
+  impactMinGapM: 10,        // at most one pothole/bump per this distance
+  wheelbaseM: 1.45,         // front then rear wheel hit the same spot this far apart (T120 ≈ 1.45 m)
+  requireRearHit: true,     // confirm every pothole/breaker by the rear wheel's repeat hit
+  roughCount: 3,            // this many unexplained jolts within roughWindowMs = a rough stretch
+  roughWindowMs: 10000,
   hardBrake: 0.35 * G,      // m/s^2
   emergencyBrake: 0.6 * G,
   hardAccel: 0.35 * G,
@@ -253,7 +262,7 @@ export function createAnalyzer(options = {}) {
     s.roughRms = Math.sqrt(Math.max(0, s.roughSqSum) / Math.max(1, s.vertBuf.length));
 
     // 6. potholes & bumps
-    detectImpact(t, vert);
+    detectImpact(t, vert, dt);
     detectCrash(t, lin);
     // 7. braking / acceleration
     detectLong(t);
@@ -283,36 +292,111 @@ export function createAnalyzer(options = {}) {
     } else { s.tiltSince = null; s.fallFired = false; }
   }
 
-  function detectImpact(t, vert) {
+  function detectImpact(t, vert, dt) {
+    // background vibration: slow RMS of the vertical signal, frozen during an impact
+    if (!s.pendingImpact) s.bgSq = s.bgSq == null ? vert * vert : s.bgSq + (vert * vert - s.bgSq) * (1 - Math.exp(-dt / 6));
+    const bg = Math.sqrt(s.bgSq || 0);
     const p = s.pendingImpact;
     if (p) {
-      p.peak = Math.max(p.peak, Math.abs(vert));
-      p.min = Math.min(p.min, vert); p.max = Math.max(p.max, vert);
-      if (t >= p.deadline) {
-        const p2p = (p.max - p.min) / G;
-        const severity = p2p < 1.2 ? 'minor' : p2p < 2.0 ? 'moderate' : 'severe';
-        emit(p.kind, p.t, { severity, peakG: +(p.peak / G).toFixed(2), p2pG: +p2p.toFixed(2) });
-        s.pendingImpact = null; s.lastImpactT = t;
-      }
+      p.samples.push({ t, v: vert });
+      if (t >= p.deadline) { s.pendingImpact = null; classifyImpact(p); }
       return;
     }
-    if (Math.abs(vert) < cfg.potholeTrigger || s.speed < cfg.potholeMinSpeed) return;
-    if (t - s.lastImpactT < cfg.potholeRefractory) return;
-    // look back for the first excursion: a pothole drops the wheel first (negative),
-    // a speed bump lifts it first (positive)
-    let onset = vert;
-    for (let i = s.vertBuf.length - 1; i >= 0 && t - s.vertBuf[i].t < 300; i--) {
-      if (Math.abs(s.vertBuf[i].v) > cfg.potholeOnset) onset = s.vertBuf[i].v;
-    }
+    closeRoughPatch(t);
+    if (s.speed < cfg.potholeMinSpeed) return;
+    if (Math.abs(vert) < Math.max(cfg.impactMinG * G, cfg.impactK * bg)) return;
+    if (t - (s.lastTriggerT || 0) < 300) return;
+    s.lastTriggerT = t;
+    // wait long enough to also see the rear wheel reach the same spot
+    const rearMs = (cfg.wheelbaseM / Math.max(s.speed, 1)) * 1000;
     s.pendingImpact = {
-      t, deadline: t + 300, kind: onset < 0 ? 'pothole' : 'bump',
-      peak: Math.abs(vert), min: Math.min(0, vert), max: Math.max(0, vert),
+      t, bg, rearMs, deadline: t + Math.min(1500, Math.max(400, rearMs * 1.35 + 250)),
+      samples: s.vertBuf.filter((b) => t - b.t <= 300).map((b) => ({ t: b.t, v: b.v })),
     };
-    // include the recent window so peak-to-peak sees the onset
-    for (let i = s.vertBuf.length - 1; i >= 0 && t - s.vertBuf[i].t < 300; i--) {
-      s.pendingImpact.min = Math.min(s.pendingImpact.min, s.vertBuf[i].v);
-      s.pendingImpact.max = Math.max(s.pendingImpact.max, s.vertBuf[i].v);
+  }
+
+  function speedKmhAgo(t, fromMs, toMs) { // highest speed seen fromMs..toMs before t (1 Hz track)
+    let v = null;
+    for (let i = s.track.length - 1; i >= 0; i--) {
+      const age = t - s.track[i].t;
+      if (age > fromMs) break;
+      if (age >= toMs) v = Math.max(v ?? 0, s.track[i].v);
     }
+    return v;
+  }
+
+  function classifyImpact(p) {
+    const all = p.samples;
+    const smp = all.filter((x) => x.t <= p.t + 400); // the front-wheel hit
+    let iMin = 0, iMax = 0;
+    smp.forEach((x, i) => { if (x.v < smp[iMin].v) iMin = i; if (x.v > smp[iMax].v) iMax = i; });
+    const minV = smp[iMin].v, maxV = smp[iMax].v;
+    const bg = Math.max(p.bg, 0.05 * G);
+    const p2pG = (maxV - minV) / G;
+    const prominence = Math.max(-minV, maxV) / bg;
+    const nowKmh = s.speed * 3.6;
+    // did the rear wheel hit the same spot one wheelbase later? (random jolts don't repeat on cue)
+    const tPeak = smp[iMax].t;
+    const rear = all.filter((x) => x.t >= tPeak + 0.65 * p.rearMs && x.t <= tPeak + 1.35 * p.rearMs);
+    const rearHit = rear.length > 0 && Math.max(...rear.map((x) => Math.abs(x.v))) >= Math.max(0.3 * maxV, 2.5 * bg);
+    const jolts = (s.jolts || []).filter((x) => p.t - x < cfg.roughWindowMs);
+    const onRough = jolts.length >= cfg.roughCount - 1;
+    // on a rough stretch an event must also stand out above the jolts this road keeps making
+    s.joltPeaks = (s.joltPeaks || []).filter((x) => p.t - x.t < 30000);
+    const joltMax = s.joltPeaks.length ? Math.max(...s.joltPeaks.map((x) => x.g)) : 0;
+    const unexplained = () => { // a jolt that isn't a pothole or breaker: evidence of a rough stretch
+      s.joltPeaks.push({ t: p.t, g: Math.max(-minV, maxV) / G });
+      s.jolts = [...jolts, p.t];
+      if (s.jolts.length >= cfg.roughCount) {
+        s.rough ??= { t0: s.jolts[0], lat: s.fix?.lat ?? null, lon: s.fix?.lon ?? null, peakG: 0, jolts: 0 };
+        s.rough.jolts = s.jolts.length > s.rough.jolts ? s.rough.jolts + 1 : s.rough.jolts + 1;
+        s.rough.peakG = Math.max(s.rough.peakG, p2pG); s.rough.lastT = p.t;
+      }
+    };
+    // pothole = the wheel drops BEFORE the big compression; rebound and the rear wheel's hit
+    // come after the spike, so only the part before the peak counts as the drop
+    let minBefore = 0;
+    for (let i = 0; i < iMax; i++) minBefore = Math.min(minBefore, smp[i].v);
+    const dipLevel = Math.max(cfg.potholeDipG * G, 2.5 * bg);
+    const dip = -minBefore >= dipLevel;
+    cfg.onClassify?.({ t: p.t, minBeforeG: minBefore / G, maxG: maxV / G, bgG: bg / G, dip });
+    let kind = null;
+    if (dip) kind = 'pothole';
+    else {
+      // compression first: a speed breaker if the rider slowed for it (or was crawling) and the
+      // compression lasted (a ramp takes time to climb; a sharp ridge or rut does not)
+      let dur = 0;
+      for (let i = iMax; i >= 0 && smp[i].v > 0.4 * maxV; i--) dur = smp[iMax].t - smp[i].t;
+      for (let i = iMax; i < smp.length && smp[i].v > 0.4 * maxV; i++) dur += i > iMax ? smp[i].t - smp[i - 1].t : 0;
+      const before = speedKmhAgo(p.t, 8000, 1500);
+      const slowed = before != null && before - nowKmh >= cfg.bumpDecelKmh;
+      if ((slowed || nowKmh <= cfg.bumpSlowKmh) && dur >= 80) kind = 'bump';
+    }
+    // on a rough stretch, the shape alone is not enough: require the rear-wheel repeat
+    if (kind && !rearHit && (onRough || cfg.requireRearHit)) kind = null;
+    if (kind === 'pothole' && onRough && maxV / G < 1.25 * joltMax) kind = null; // breakers have slow-down + duration instead
+    if (!kind) { unexplained(); return; }
+    if (s.lastImpactPos && s.fix) {
+      const d = haversine(s.lastImpactPos.lat, s.lastImpactPos.lon, s.fix.lat, s.fix.lon);
+      if (d < cfg.impactMinGapM && p.t - s.lastImpactT < 10000) return;
+    }
+    s.lastImpactT = p.t;
+    if (s.fix) s.lastImpactPos = { lat: s.fix.lat, lon: s.fix.lon };
+    const severity = p2pG < 1.2 ? 'minor' : p2pG < 2.0 ? 'moderate' : 'severe';
+    emit(kind, p.t, { severity, peakG: +(Math.max(-minV, maxV) / G).toFixed(2), p2pG: +p2pG.toFixed(2), prominence: +prominence.toFixed(1) });
+  }
+
+  function closeRoughPatch(t) {
+    const r = s.rough;
+    if (!r || t - r.lastT < cfg.roughWindowMs) return;
+    s.rough = null;
+    const startPt = s.track.find((q) => q.t >= r.t0) || null;
+    const endPt = [...s.track].reverse().find((q) => q.t <= r.lastT) || null;
+    const lengthM = startPt && endPt ? Math.round(haversine(startPt.lat, startPt.lon, endPt.lat, endPt.lon)) : null;
+    emit('rough', r.t0, {
+      severity: r.peakG >= 2 ? 'serious' : 'warning', endT: r.lastT, jolts: r.jolts, peakG: +r.peakG.toFixed(2), lengthM,
+      lat: startPt?.lat ?? r.lat, lon: startPt?.lon ?? r.lon, endLat: endPt?.lat ?? null, endLon: endPt?.lon ?? null,
+    });
   }
 
   function detectLong(t) {
@@ -551,7 +635,7 @@ export function createAnalyzer(options = {}) {
       maxAlt: Number.isFinite(s.maxAlt) ? Math.round(s.maxAlt) : null,
       maxLeanLeft: +Math.abs(s.maxLeanL).toFixed(1), maxLeanRight: +s.maxLeanR.toFixed(1),
       peakG: +s.peakG.toFixed(2),
-      potholes: count('pothole'), bumps: count('bump'), hardBrakes: count('brake'),
+      potholes: count('pothole'), bumps: count('bump'), roughStretches: count('rough'), hardBrakes: count('brake'),
       hardAccels: count('accel'), shifts: s.shifts.length,
       clutchPct: s.movingMs ? +((s.clutchMs / s.movingMs) * 100).toFixed(1) : null,
       gearRatios: [...s.gears].sort((a, b) => b.ratio - a.ratio).map((g) => +g.ratio.toFixed(1)),
