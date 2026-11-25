@@ -61,6 +61,20 @@ npm run test:browser
 
 Use Node 22.5 or later. Run `npm run build` for the static production app in `public/`. To regenerate the dashboard screenshots after building, run `RIDELENS_SCREENSHOTS=docs/screenshots npm run test:browser`. Set `CHROMIUM_PATH` to use an existing Chromium executable.
 
+## Trip: target time and live ETA
+Tap **Trip ETA** at the top of the Live dashboard (or **Set destination** in the Trip card below it). Search for a place, or paste coordinates or a Google Maps/Waze link, then optionally set a target arrival time. Once a trip is running, that top button shows the live ETA and minutes spare (+) or late (−). Tap it to jump to the full Trip card.
+
+The Trip card shows:
+- **ETA**, the target time, minutes spare or late, the remaining distance, and the average speed needed to make the target.
+- Where the ETA comes from:
+  - **Route time**: [OSRM](https://project-osrm.org/) on OpenStreetMap data. It has **no live traffic** and uses a car profile.
+  - **At your pace**: once you've covered about 2 minutes of route, the remaining route time is scaled by how this trip has actually gone so far.
+  - **Straight-line estimate**: if the routing server can't be reached, the app uses straight-line distance ÷ your average moving speed, and labels it that way.
+- The app re-routes when you're more than 80 m off the route for 15 s, at most every 30 s.
+- **Navigate in Waze / Google Maps** buttons hand the destination to those apps ([Waze deep links](https://developers.google.com/waze/deeplinks), Google Maps URLs with `travelmode=two-wheeler`).
+  - **Waze and Google Maps do not let other apps read their live ETA**, so their numbers can't appear inside RideLens.
+  - Opening either app sends RideLens to the background, where browsers pause its sensors.
+
 ## What gets measured, and from which sensor
 
 | Metric | Source | How |

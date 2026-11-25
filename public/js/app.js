@@ -948,6 +948,7 @@ function endTrip(silent) {
   trip = null;
   tripLine?.remove(); tripPin?.remove(); tripLine = tripPin = null;
   $('tripEmpty').hidden = false; $('tripLive').hidden = true;
+  renderTripQuick(null);
   if (!silent) toast('Trip ended');
 }
 
@@ -973,10 +974,21 @@ async function onTripFix(t, fix) {
   renderTrip();
 }
 
+// dashboard-heading shortcut: shows the live ETA so it's visible without scrolling
+function renderTripQuick(st, best) {
+  const q = $('tripQuick'), t = $('tripQuickText');
+  if (!q || !t) return;
+  if (!st) { t.textContent = 'Trip ETA'; q.removeAttribute('data-tone'); return; }
+  const tone = { early: 'good', 'on-time': 'warning', late: 'critical' }[best?.state];
+  t.textContent = st.arrived ? 'Arrived' : best ? `ETA ${fmtHM(best.eta)}${best.slackMin != null ? ` · ${best.slackMin >= 0 ? '+' : ''}${best.slackMin} min` : ''}` : 'ETA …';
+  if (tone && !st.arrived) q.dataset.tone = tone; else q.removeAttribute('data-tone');
+}
+
 function renderTrip() {
-  if (!trip) return;
+  if (!trip) { renderTripQuick(null); return; }
   const st = trip.status();
   const best = st.paceEta || st.routeEta || st.straightEta;
+  renderTripQuick(st, best);
   $('tripEta').textContent = st.arrived ? 'Arrived' : best ? fmtHM(best.eta) : '—';
   $('tripEtaKind').textContent = st.arrived ? '' : st.paceEta ? `at your pace (route time × ${st.paceEta.pace.toFixed(2)})`
     : st.routeEta ? 'route time, no live traffic' : st.straightEta ? 'straight-line estimate' : 'waiting for GPS…';
@@ -999,6 +1011,10 @@ function renderTrip() {
 setInterval(renderTrip, 1000);
 
 $('tripSet').addEventListener('click', openTripDialog);
+$('tripQuick')?.addEventListener('click', () => {
+  if (trip) $('tripCard').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  else openTripDialog();
+});
 $('tripEdit').addEventListener('click', openTripDialog);
 $('tripEnd').addEventListener('click', () => endTrip());
 $('tripSearch').addEventListener('click', runTripSearch);
