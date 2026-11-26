@@ -5,6 +5,18 @@ import { startAutoWatch } from './wrongside-watch.js';
 import { createYouTubePlayer, parseYouTubeLink } from './ytplayer.js';
 import { summarizeRoad, summarizeWrongSide, roadReportHtml, wrongSideReportHtml, blobToDataUrl, stampedSnapshot } from './ride-reports.js';
 import { parseCommand, startVoice, voiceSupported } from './voice.js';
+import { BUILD } from './build-id.js';
+window.__RIDELENS_APP_BUILD = BUILD;
+// The opposite mix (fresh app code, stale cached page shell) is caught here: refresh the
+// shell past the browser cache and reload once, instead of running against the wrong page.
+if (window.__RIDELENS_SHELL_BUILD !== BUILD) {
+  let tried = false;
+  try { tried = sessionStorage.getItem('ridelens.reloadForShell') === BUILD; sessionStorage.setItem('ridelens.reloadForShell', BUILD); } catch {}
+  if (!tried) {
+    Promise.all(['js/cockpit.js', 'index.html', './'].map((u) => fetch(u, { cache: 'reload' }).catch(() => null))).finally(() => location.reload());
+    throw new Error('RideLens updated: reloading');
+  }
+}
 import { Dashcam, fileName, retention, overlapping, stamp, clipsInRange, DAY_PARTS } from './dashcam.js';
 import { mergeHazards, hazardsGeoJson, hazardsCsv } from './hazards.js';
 import { createAnalyzer, comfortClass, comfortLegend } from './analytics.js';
@@ -20,7 +32,7 @@ const G = 9.80665;
 
 // ---------------- settings ----------------
 const settings = (() => {
-  const def = { camFull: true, compact: true, discreet: true, voiceOn: false, voiceWake: false, protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: '', keepSide: 'left', autoWatch: true, ytLink: '', dashcam: true, dcDays: '5', dcQuality: '2160', w3wKey: '', rawLog: false };
+  const def = { camFull: true, compact: true, discreet: true, voiceOn: true, voiceWake: false, protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: '', keepSide: 'left', autoWatch: true, ytLink: '', dashcam: true, dcDays: '5', dcQuality: '2160', w3wKey: '', rawLog: false };
   try {
     const v = { ...def, ...JSON.parse(localStorage.getItem('ridelens.settings') || '{}') };
     if (typeof v.invertYaw === 'boolean') v.invertYaw = v.invertYaw ? 'invert' : ''; // migrate old checkbox
@@ -847,9 +859,10 @@ function setImmersive(on) {
   $('hud').hidden = !on;
   clearInterval(hudTimer);
   if (on) {
-    $('camBox').requestFullscreen?.({ navigationUI: 'hide' }).catch(() => {}); // Android; iPhone keeps the page view
+    try { $('camBox').requestFullscreen?.({ navigationUI: 'hide' })?.catch?.(() => {}); } catch { /* iPhone: no element full screen; the fixed full-window layout is used */ }
+    window.scrollTo(0, 0);
     updateHud(); hudTimer = setInterval(updateHud, 500);
-  } else if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  } else if (document.fullscreenElement) { try { document.exitFullscreen?.()?.catch?.(() => {}); } catch {} }
 }
 function updateHud() {
   const sn = analyzer.snapshot();
@@ -868,6 +881,7 @@ function updateHud() {
   $('hudWatch').textContent = !autoStop ? (quiet ? 'Auto off' : 'Auto-detect off') : st?.error ? (quiet ? 'Auto unavailable' : 'Detector unavailable')
     : st ? (quiet ? 'Auto' : `Watching ${side} · ${st.vehicles} vehicle${st.vehicles === 1 ? '' : 's'}`) : 'Starting…';
   $('hudVoice').setAttribute('aria-pressed', String(!!voiceStop));
+  $('hudVoiceText').textContent = !voiceStop ? 'Voice' : voiceListening ? 'Listening' : 'Voice…';
   $('hudWatch').classList.toggle('warn', !!st?.error || (autoStop && st && sn.speedSrc === 'none'));
   const ev = analyzer.events;
   $('hudWs').textContent = recording ? ev.filter((e) => e.type === 'wrongside').length : '—';
@@ -906,7 +920,7 @@ function hudAlert(text) {
   clearTimeout(hudAlertTimer); hudAlertTimer = setTimeout(() => { el.hidden = true; }, 4000);
 }
 // ---------------- voice commands ----------------
-let voiceStop = null, heardTimer = null;
+let voiceStop = null, heardTimer = null, voiceListening = false;
 const VIEW_OF = { 'view:camera': 'wrongside', 'view:report': 'report', 'view:history': 'history', 'view:setup': 'setup', 'view:live': 'live' };
 async function runVoice(cmd) {
   if (VIEW_OF[cmd]) {
@@ -929,9 +943,11 @@ function setVoice(on) {
     voiceStop = startVoice({
       requireWake: !!settings.voiceWake,
       onCommand: (cmd) => runVoice(cmd).catch((e) => toast(e.message, 3000)),
+      onHeard: (text) => { if (!text) return; if (immersive) { const h = $('hudHeard'); h.textContent = `🎙 "${text}" (not a command)`; h.hidden = false; clearTimeout(heardTimer); heardTimer = setTimeout(() => { h.hidden = true; }, 2500); } else toast(`Heard "${text}": not a command`, 2000); },
       onState: (st) => {
         if (st.error) { $('voiceMsg').textContent = st.error; settings.voiceOn = false; $('voiceOn').checked = false; saveSettings(); voiceStop = null; }
         else $('voiceMsg').textContent = st.listening ? 'Listening for commands…' : 'Voice commands on (restarting the listener)…';
+        voiceListening = !!st.listening;
         if (immersive) updateHud();
       },
     });
@@ -944,7 +960,8 @@ $('voiceOn').addEventListener('change', (e) => { settings.voiceOn = e.target.che
 $('voiceWake').addEventListener('change', (e) => { settings.voiceWake = e.target.checked; saveSettings(); if (voiceStop) setVoice(true); });
 $('hudVoice').addEventListener('click', () => { settings.voiceOn = !voiceStop; $('voiceOn').checked = settings.voiceOn; saveSettings(); setVoice(settings.voiceOn); });
 if (!voiceSupported()) { $('voiceMsg').textContent = 'This browser has no speech recognition.'; }
-else if (settings.voiceOn) document.addEventListener('pointerdown', () => { if (settings.voiceOn && !voiceStop) setVoice(true); }, { once: true });
+// browsers only allow the microphone to start from a tap: the first tap anywhere starts listening
+else if (settings.voiceOn) document.addEventListener('pointerdown', () => { if (settings.voiceOn && !voiceStop) setVoice(true); }, { once: true, capture: true });
 window.__voice = { parseCommand, runVoice }; // for diagnostics/tests
 window.__autoCapture = (detection) => capture(detection); // diagnostics/tests: the path a hands-free detection takes
 $('camFull').addEventListener('click', async () => { if (!camOn) await setCamera(true); if (camOn) setImmersive(true); });
@@ -1770,4 +1787,9 @@ $('permBtn').addEventListener('click', async () => {
   toast(out.join(' · '), 5000); renderCaps();
 });
 
-if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
+  // a new version took over: reload once so page and code match (not mid-ride)
+  let swReloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (!swReloaded && !recording && !camOn) { swReloaded = true; location.reload(); } });
+}

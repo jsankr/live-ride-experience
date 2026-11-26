@@ -297,6 +297,19 @@ try {
   assert.equal(await evidencePage.locator('#airStats').isHidden(), true);
   assert.deepEqual(errors, []);
 
+  // A phone's HTTP cache can hand out an old app.js under a fresh page (the 26 Nov field
+  // report: new buttons, old code, nothing worked). The page must notice and heal itself.
+  const stale = await browser.newContext({ serviceWorkers: 'block' });
+  let staleServed = 0;
+  await stale.route('**/js/app.js', (route) => (staleServed++ === 0
+    ? route.fulfill({ contentType: 'text/javascript', body: '/* an older RideLens build */' })
+    : route.continue()));
+  const stalePage = await stale.newPage();
+  await stalePage.goto(base);
+  await stalePage.waitForFunction(() => !!window.__RIDELENS_APP_BUILD, null, { timeout: 20000 });
+  assert.equal(await stalePage.evaluate(() => window.__RIDELENS_APP_BUILD === window.__RIDELENS_SHELL_BUILD), true, 'reloaded onto matching code');
+  await stale.close();
+
   const offline = await browser.newContext();
   await offline.route('https://**/*', (route) => route.abort());
   const offlinePage = await offline.newPage();

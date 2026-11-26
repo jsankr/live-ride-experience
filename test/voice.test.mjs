@@ -20,4 +20,7 @@ test('voice: with the wake word on, only "RideLens …" phrases count', () => {
   assert.equal(parseCommand('report', { requireWake: true }), null);
   assert.equal(parseCommand('RideLens report', { requireWake: true }), 'view:report');
   assert.equal(parseCommand('ride lens, start ride', { requireWake: true }), 'start ride');
+  assert.equal(parseCommand('RideLens start camera', { requireWake: true }), 'camera on');
+  assert.equal(parseCommand('RideLens start camera'), 'camera on', 'wake word is fine when not required');
+  assert.equal(parseCommand('Ride Lens open camera'), 'full screen');
 });
