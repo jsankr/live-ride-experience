@@ -26,12 +26,15 @@ const overlap = (a, b) => {
   return inter / (Math.min(a[2] * a[3], b[2] * b[3]) || 1);
 };
 
-function slope(points) { // least squares d over t (seconds)
+function fit(points) { // least squares d over t (seconds): slope and how well a straight line explains it
   const n = points.length;
   const mt = points.reduce((s, p) => s + p.t, 0) / n, md = points.reduce((s, p) => s + p.d, 0) / n;
-  let num = 0, den = 0;
-  for (const p of points) { num += (p.t - mt) * (p.d - md); den += (p.t - mt) ** 2; }
-  return den ? num / den : 0;
+  let num = 0, den = 0, tot = 0;
+  for (const p of points) { num += (p.t - mt) * (p.d - md); den += (p.t - mt) ** 2; tot += (p.d - md) ** 2; }
+  const slope = den ? num / den : 0;
+  let res = 0;
+  for (const p of points) res += (p.d - (md + slope * (p.t - mt))) ** 2;
+  return { slope, r2: tot ? 1 - res / tot : 0 };
 }
 
 export function createWrongSideTracker(options = {}) {
@@ -42,7 +45,14 @@ export function createWrongSideTracker(options = {}) {
     // Keep-left India: a wrong-side vehicle comes at us on OUR LEFT (between us and the kerb)
     // or dead ahead. Oncoming traffic on our right is legitimate and ignored.
     sideEdgeM: 0.2,        // max lateral offset toward the oncoming side (m) that still counts
-    minOwnVelocityKmh: 8,  // the vehicle's own speed toward us must exceed this
+    minOwnVelocityKmh: 12, // the vehicle's own speed toward us must exceed this...
+    minOwnVelocityFrac: 0.25, // ...and this fraction of our speed (distance-from-width is ±25 %)
+    maxOwnVelocityKmh: 140, // faster than this is a measurement glitch, not a vehicle
+    minDistanceM: 4,       // closer than this the box is usually cut off by the picture edge
+    minSightings: 3,       // seen at least this many times...
+    minSpanS: 0.6,         // ...over at least this long...
+    minFitR2: 0.6,         // ...closing steadily (distances on a straight line, not jitter)
+    requireOwnSpeed: true, // without GPS speed we cannot tell oncoming from slower traffic
     minScore: 0.45,
     ...options,
   };
@@ -50,7 +60,11 @@ export function createWrongSideTracker(options = {}) {
   let nextId = 1;
   const tanHalf = () => Math.tan((cfg.fovDeg * Math.PI) / 360);
 
-  function update(tMs, detections, frameW, frameH, ownSpeedKmh = null) {
+  // region: [x, y, w, h] of the analysed crop in frame coordinates. A box touching its
+  // edge is cut off, so its width (and the distance from it) is wrong.
+  function update(tMs, detections, frameW, frameH, ownSpeedKmh = null, region = [0, 0, frameW, frameH]) {
+    const edge = 0.015 * frameW;
+    const clippedBox = ([x, y, w, h]) => x <= region[0] + edge || x + w >= region[0] + region[2] - edge || y + h >= region[1] + region[3] - edge;
     const t = tMs / 1000;
     const vehicles = detections.filter((d) => REAL_WIDTH_M[d.class] && d.score >= cfg.minScore);
     // associate detections with tracks (greedy by IoU, same class)
@@ -67,7 +81,7 @@ export function createWrongSideTracker(options = {}) {
       const d = REAL_WIDTH_M[det.class] / (2 * tanHalf() * Math.max(wFrac, 1e-3));
       const cx = (det.bbox[0] + det.bbox[2] / 2) / frameW;
       const lateral = (cx - 0.5) * 2 * d * tanHalf(); // metres, + = right of our line of travel
-      const obs = { t, box: det.bbox, d, lateral, score: det.score };
+      const obs = { t, box: det.bbox, d, lateral, score: det.score, clipped: clippedBox(det.bbox) };
       if (best) {
         free.delete(best.id);
         const tr = tracks.get(best.id);
@@ -81,26 +95,34 @@ export function createWrongSideTracker(options = {}) {
     for (const [id, tr] of tracks) if (t - tr.last.t > 1.5) tracks.delete(id);
 
     const alerts = [];
+    if (ownSpeedKmh == null && cfg.requireOwnSpeed) return alerts;
     for (const tr of tracks.values()) {
-      if (tr.fired || tr.obs.length < 2) continue;
-      const span = tr.obs[tr.obs.length - 1].t - tr.obs[0].t;
-      if (span < (tr.obs.length >= 3 ? 0.6 : 0.3)) continue; // 2 sightings allowed when spaced out
-      const closingKmh = -slope(tr.obs) * 3.6;
+      if (tr.fired || tr.last.clipped) continue;
+      const good = tr.obs.filter((o) => !o.clipped);
+      if (good.length < cfg.minSightings) continue;
+      const span = good[good.length - 1].t - good[0].t;
+      if (span < cfg.minSpanS) continue;
+      const { slope, r2 } = fit(good);
+      if (r2 < cfg.minFitR2) continue;
+      const closingKmh = -slope * 3.6;
       const own = ownSpeedKmh ?? 0;
       const ownVelocityKmh = closingKmh - own; // the other vehicle's own speed toward us
-      const near = tr.last.d <= cfg.triggerDistanceM;
+      const near = tr.last.d <= cfg.triggerDistanceM && tr.last.d >= cfg.minDistanceM;
       // lateral offset toward the side oncoming traffic should use
       const towardOncoming = cfg.keep === 'left' ? tr.last.lateral : -tr.last.lateral;
       const inOurLane = towardOncoming <= cfg.sideEdgeM;
-      const needed = cfg.minOwnVelocityKmh + (ownSpeedKmh == null ? 7 : 0); // stricter without GPS speed
-      if (near && inOurLane && ownVelocityKmh >= needed) {
+      const needed = Math.max(cfg.minOwnVelocityKmh + (ownSpeedKmh == null ? 7 : 0), cfg.minOwnVelocityFrac * own);
+      if (near && inOurLane && ownVelocityKmh >= needed && ownVelocityKmh <= cfg.maxOwnVelocityKmh) {
         tr.fired = true;
         alerts.push({
           trackId: tr.id, vehicleClass: tr.cls, type: LABELS[tr.cls], box: tr.last.box,
           distanceM: +tr.last.d.toFixed(1), lateralM: +towardOncoming.toFixed(1),
           closingKmh: Math.round(closingKmh), oncomingKmh: Math.round(ownVelocityKmh),
           ownSpeedKmh: ownSpeedKmh == null ? null : Math.round(ownSpeedKmh),
-          score: +Math.max(...tr.obs.map((o) => o.score)).toFixed(2), sightings: tr.obs.length,
+          score: +Math.max(...tr.obs.map((o) => o.score)).toFixed(2), sightings: good.length,
+          fitR2: +r2.toFixed(2), spanS: +span.toFixed(1),
+          // it closes faster than we move, so it is driving toward us: we see its front
+          direction: 'toward you', view: 'front',
         });
       }
     }
@@ -130,7 +152,7 @@ export function nextInterval({ ownSpeedKmh, active, lastInferMs = 0 }) {
   return Math.min(2000, Math.max(base, 2 * lastInferMs));
 }
 
-export function startAutoWatch({ video, overlay, loadDetector, getOwnSpeedKmh, keep = 'left', onAlert, onStatus }) {
+export function startAutoWatch({ video, overlay, loadDetector, getOwnSpeedKmh, keep = 'left', onAlert, onStatus, isPaused = () => false, isDiscreet = () => false }) {
   let stopped = false, frames = 0, lastStatus = 0, lastAlert = 0;
   const tracker = createWrongSideTracker({ keep });
   const canvas = document.createElement('canvas');
@@ -144,7 +166,7 @@ export function startAutoWatch({ video, overlay, loadDetector, getOwnSpeedKmh, k
     const cycleStart = performance.now();
     let wait = 500;
     try {
-      if (!detector || !video.videoWidth || document.hidden) return;
+      if (!detector || !video.videoWidth || document.hidden || isPaused()) return; // paused while the camera is zoomed for evidence
       const vw = video.videoWidth, vh = video.videoHeight;
       const [rx, ry, rw, rh] = watchRegion(keep, vw, vh);
       const k = 576 / rw; // crop always fed at 576 px wide: low-res cameras get enlarged, which helps the detector find small, distant vehicles
@@ -160,8 +182,8 @@ export function startAutoWatch({ video, overlay, loadDetector, getOwnSpeedKmh, k
       // portrait streams see a narrower horizontal angle than landscape ones
       tracker.config.fovDeg = vw >= vh ? 64 : 48;
       const own = getOwnSpeedKmh();
-      const alerts = tracker.update(Date.now(), preds, fw, fh, own);
-      drawOverlay(overlay, { width: fw, height: fh }, tracker.tracks, alerts);
+      const alerts = tracker.update(Date.now(), preds, fw, fh, own, [rx * k, ry * k, rw * k, rh * k]);
+      drawOverlay(overlay, { width: fw, height: fh }, tracker.tracks, alerts, isDiscreet());
       const nowS = Date.now() / 1000;
       active = tracker.tracks.some((tr) => nowS - tr.last.t < 2 && tr.last.d < 45);
       for (const a of alerts) {
@@ -184,7 +206,7 @@ export function startAutoWatch({ video, overlay, loadDetector, getOwnSpeedKmh, k
   return () => { stopped = true; overlay?.getContext('2d').clearRect(0, 0, overlay.width, overlay.height); };
 }
 
-function drawOverlay(overlay, frame, tracks, alerts) {
+function drawOverlay(overlay, frame, tracks, alerts, discreet = false) {
   if (!overlay) return;
   overlay.width = frame.width; overlay.height = frame.height;
   const ctx = overlay.getContext('2d');
@@ -194,6 +216,18 @@ function drawOverlay(overlay, frame, tracks, alerts) {
   for (const tr of tracks) {
     if (Date.now() / 1000 - tr.last.t > 0.8) continue;
     const [x, y, w, h] = tr.last.box;
+    if (discreet) {
+      // camera-style focus brackets only: nothing on screen says what is being looked for
+      const c = Math.min(w, h) * 0.22;
+      ctx.strokeStyle = hot.has(tr.id) || tr.fired ? 'rgba(255,214,10,.95)' : 'rgba(255,255,255,.6)';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      for (const [px, py, dx, dy] of [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]]) {
+        ctx.moveTo(px + dx * c, py); ctx.lineTo(px, py); ctx.lineTo(px, py + dy * c);
+      }
+      ctx.stroke();
+      continue;
+    }
     ctx.strokeStyle = hot.has(tr.id) || tr.fired ? '#e5484d' : 'rgba(255,255,255,.75)';
     ctx.strokeRect(x, y, w, h);
     const label = `${LABELS[tr.cls]} · ${Math.round(tr.last.d)} m`;

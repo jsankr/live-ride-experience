@@ -34,3 +34,18 @@ test('finds the clips around an incident', () => {
   const clips = [{ id: 'a', start: 0, end: 60000 }, { id: 'b', start: 60000, end: 120000 }, { id: 'c', start: 120000, end: 180000 }];
   assert.deepEqual(overlapping(clips, 70000).map((c) => c.id), ['a', 'b']);
 });
+
+import { clipsInRange, DAY_PARTS } from '../public/js/dashcam.js';
+test('bulk delete selects by day and time of day, skipping locked clips unless asked', () => {
+  const at = (d, h, m = 0) => new Date(2026, 10, d, h, m).getTime();
+  const clips = [
+    { id: 'a', start: at(25, 7), locked: false }, { id: 'b', start: at(25, 9, 30), locked: true },
+    { id: 'c', start: at(25, 18), locked: false }, { id: 'd', start: at(25, 23, 15), locked: false },
+    { id: 'e', start: at(26, 2), locked: false }, { id: 'f', start: at(26, 8), locked: false },
+  ];
+  assert.deepEqual(clipsInRange(clips, { day: '2026-11-25', from: DAY_PARTS.all[0], to: DAY_PARTS.all[1] }), ['a', 'c', 'd']);
+  assert.deepEqual(clipsInRange(clips, { day: '2026-11-25', from: DAY_PARTS.morning[0], to: DAY_PARTS.morning[1], includeLocked: true }), ['a', 'b']);
+  assert.deepEqual(clipsInRange(clips, { day: '2026-11-25', from: DAY_PARTS.evening[0], to: DAY_PARTS.evening[1] }), ['c']);
+  assert.deepEqual(clipsInRange(clips, { from: DAY_PARTS.night[0], to: DAY_PARTS.night[1] }), ['d', 'e'], 'night wraps past midnight');
+  assert.deepEqual(clipsInRange(clips, { day: '2026-11-26', from: '07:30', to: '09:00' }), ['f']);
+});

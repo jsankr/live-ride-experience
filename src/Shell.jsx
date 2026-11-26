@@ -142,11 +142,38 @@ export function Shell() {
     <section id="view-wrongside" className="view" aria-label="Wrong-side reports">
       <div className="grid ws-grid">
         <article className="card cam-card">
-          <div className="card-head"><h3>Evidence camera</h3><button className="ghost" id="camToggle">Start camera</button></div>
-          <div className="cam"><video id="camVideo" playsInline muted></video><canvas id="camOverlay" className="cam-overlay" aria-hidden="true"></canvas><div className="cam-off" id="camOff">Camera off. Start it before you ride and point the phone at the road ahead. RideLens then watches on its own: no tapping while riding.</div></div>
+          <div className="card-head"><h3>Evidence camera</h3><span className="actions"><button className="ghost" id="camFull">Full screen</button><button className="ghost" id="camToggle">Start camera</button></span></div>
+          <div className="cam" id="camBox"><video id="camVideo" playsInline muted></video><canvas id="camOverlay" className="cam-overlay" aria-hidden="true"></canvas><div className="cam-off" id="camOff">Camera off. Start it before you ride and point the phone at the road ahead. RideLens then watches on its own: no tapping while riding.</div>
+            {/* Full-screen heads-up display: everything is drawn over the live picture. */}
+            <div className="hud" id="hud" hidden>
+              <div className="hud-top">
+                <span className="hud-pill" id="hudRec"><i></i><span id="hudRecText">Dashcam off</span></span>
+                <span className="hud-pill" id="hudWatch">Watching left</span>
+                <span className="hud-pill" id="hudGps">GPS —</span>
+                <span className="hud-clock" id="hudClock">--:--:--</span>
+              </div>
+              <div className="hud-speed"><b id="hudSpeed">—</b><small id="hudUnit">km/h</small></div>
+              <div className="hud-stats">
+                <span><b id="hudWs">0</b>captures</span>
+                <span><b id="hudPot">0</b>potholes</span>
+                <span><b id="hudBump">0</b>breakers</span>
+                <span><b id="hudDist">0.0</b><span id="hudDistUnit">km</span></span>
+              </div>
+              <div className="hud-alert" id="hudAlert" hidden></div>
+              <figure className="hud-zoom" id="hudZoom" hidden><img id="hudZoomImg" alt="" /><figcaption id="hudZoomTxt"></figcaption></figure>
+              <span className="hud-heard" id="hudHeard" hidden></span>
+              <div className="hud-bottom">
+                <button type="button" className="hud-btn" id="hudExit" aria-label="Exit full screen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg><span>Exit</span></button>
+                <button type="button" className="hud-btn" id="hudAuto" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" fill="none" stroke="currentColor" strokeWidth="2" /><circle cx="12" cy="12" r="3" fill="currentColor" /></svg><span>Auto-detect</span></button>
+                <button type="button" className="hud-btn hud-voice" id="hudVoice" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg><span>Voice</span></button>
+                <button type="button" className="hud-btn" id="hudDash" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M16 10l5-3v10l-5-3z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" /></svg><span>Dashcam</span></button>
+                <button type="button" className="hud-btn" id="hudRide" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="2" /><circle cx="12" cy="12" r="4" fill="currentColor" /></svg><span id="hudRideText">Start ride</span></button>
+              </div>
+            </div>
+          </div>
           <label className="check auto-row"><input type="checkbox" id="autoWatch" defaultChecked /> <span><b>Hands-free: auto-detect wrong-side vehicles</b><br /><span className="muted" id="autoStatus">Starts with the camera.</span></span></label>
           <p className="fine">When a vehicle comes toward you in your lane, RideLens saves a photo burst (including the 4 s before), then reads the vehicle type, colour, rider and number plate by itself. Detections are estimates from the camera image. Review them before sharing. The camera only works while RideLens is on screen.</p>
-          <button className="capture" id="captureBtn" disabled>Capture wrong-side vehicle</button>
+          <button className="capture" id="captureBtn" disabled>Capture now (when parked)</button>
           <p className="fine">Optional shortcut: a Bluetooth remote sending <kbd>Enter</kbd>/<kbd>Space</kbd> also captures.</p>
         </article>
         <article className="card dashcam-card" id="dashcamCard">
@@ -159,11 +186,43 @@ export function Shell() {
           <div className="storage-bar" aria-hidden="true"><i id="dcBar"></i></div>
           <p className="fine" id="dcStorage"></p>
           <p className="fine">Incidents lock the footage 30 s before and after: crash-level impact, the bike falling over, emergency braking, a wrong-side vehicle, or the red camera button. Sensor incidents need <b>Start ride</b> to be on. Each incident stores time, GPS, your speed and heading, and the other vehicle's type, colour and plate when the camera can read them. Files stay in RideLens on this phone. Use <b>Save</b> to put one in Photos/Files, iCloud Drive, Google Drive or OneDrive.</p>
+          <div className="dc-tools">
+            <button type="button" className="ghost" id="dcSelect" aria-pressed="false">Select to delete</button>
+            <span className="muted" id="dcSelInfo"></span>
+          </div>
+          <div className="dc-bulk" id="dcBulk" hidden>
+            <div className="two">
+              <label>Day <select id="dcDay"></select></label>
+              <label>Time <select id="dcPart">
+                <option value="all">Whole day</option>
+                <option value="morning">Morning (05:00–12:00)</option>
+                <option value="afternoon">Afternoon (12:00–17:00)</option>
+                <option value="evening">Evening (17:00–22:00)</option>
+                <option value="night">Night (22:00–05:00)</option>
+                <option value="custom">Custom…</option>
+              </select></label>
+            </div>
+            <div className="two" id="dcCustom" hidden>
+              <label>From <input type="time" id="dcFrom" defaultValue="06:00" /></label>
+              <label>To <input type="time" id="dcTo" defaultValue="09:00" /></label>
+            </div>
+            <label className="check"><input type="checkbox" id="dcInclLocked" /> <span>Also select locked incident clips</span></label>
+            <div className="row">
+              <button type="button" className="ghost" id="dcPick">Select this range</button>
+              <button type="button" className="ghost" id="dcAll">Select all</button>
+              <button type="button" className="ghost" id="dcNone">Clear</button>
+              <button type="button" className="danger" id="dcDelete" disabled>Delete selected</button>
+            </div>
+            <div className="dc-confirm" id="dcConfirm" hidden>
+              <span id="dcConfirmText"></span>
+              <span className="row" style={{ margin: 0 }}><button type="button" className="danger" id="dcConfirmYes">Delete</button><button type="button" className="ghost" id="dcConfirmNo">Keep</button></span>
+            </div>
+          </div>
           <div id="dcList" className="list"></div>
         </article>
         <article className="card">
           <div className="card-head"><h3>Reports</h3>
-            <span className="actions"><button className="ghost" id="wsCsv">CSV</button><button className="ghost" id="wsJson">JSON</button><button className="ghost" id="wsSync">Sync</button></span>
+            <span className="actions"><button className="ghost" id="wsDoc">Police report</button><button className="ghost" id="wsCsv">CSV</button><button className="ghost" id="wsJson">JSON</button><button className="ghost" id="wsSync">Sync</button></span>
           </div>
           <div id="wsStats" className="ws-stats"></div>
           <div id="wsList" className="list"></div>
@@ -209,6 +268,12 @@ export function Shell() {
             <select id="invertYaw"><option value="">Automatic (learned from GPS turns)</option><option value="normal">Force normal</option><option value="invert">Force inverted</option></select>
           </label>
           <label>Traffic drives on the <select id="keepSide"><option value="left">left (India, UK, Australia…)</option><option value="right">right (USA, Europe…)</option></select></label>
+          <label className="check"><input type="checkbox" id="compact" defaultChecked /> <span><b>Compact storage (recommended)</b>: after each ride keep only the reports, wrong-side snapshots and locked incident clips. Plain dashcam video of the ride and extra burst photos are deleted.</span></label>
+          <label className="check"><input type="checkbox" id="discreet" defaultChecked /> <span><b>Discreet camera screen</b>: on the full-screen camera, show only camera-style focus brackets and neutral words ("captures", "saved"), so people nearby can't tell what is being recorded.</span></label>
+          <label className="check"><input type="checkbox" id="voiceOn" /> <span><b>Voice commands</b>: say "camera", "live", "report", "history", "setup", "start ride", "stop ride", "full screen", "exit full screen", "dashcam on/off". On iPhone, Dictation must be on (Settings → General → Keyboard). Wind noise at speed makes recognition unreliable: a helmet headset microphone helps.</span></label>
+          <label className="check"><input type="checkbox" id="voiceWake" /> <span>Only react when I start with "RideLens…" (e.g. "RideLens report"), so talking to a pillion doesn't switch screens</span></label>
+          <p className="fine" id="voiceMsg"></p>
+          <label className="check"><input type="checkbox" id="camFullSet" defaultChecked /> <span>Open the camera full screen when it starts</span></label>
           <label className="check"><input type="checkbox" id="rawLog" /> <span>Keep raw sensor data with each ride (about 10 MB per hour). Lets a ride be re-analysed later when detection improves, and helps tune pothole detection for your bike.</span></label>
           <label>Units <select id="units"><option value="metric">km/h, °C, m</option><option value="imperial">mph, °F, ft</option></select></label>
           <label>Theme <select id="theme"><option value="">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
@@ -233,7 +298,7 @@ export function Shell() {
     <button type="button" id="mfNext" aria-label="Next song"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 5H18v14h-2.5zM4 5v14l10.5-7z" fill="currentColor" /></svg></button>
   </div>
   <button id="tripQuick" className="trip-fab" aria-controls="tripCard"><span aria-hidden="true">⏱</span><span id="tripQuickText">Trip ETA</span></button>
-  <button id="fab" className="fab" title="Report wrong-side vehicle" aria-label="Report wrong-side vehicle">
+  <button id="fab" className="fab" title="Capture now" aria-label="Capture now" hidden>
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" /><circle cx="12" cy="13" r="3.5" fill="none" stroke="currentColor" strokeWidth="2" /></svg>
   </button>
 
@@ -241,7 +306,7 @@ export function Shell() {
     <button data-view="live" className="active" aria-current="page"><svg viewBox="0 0 24 24"><path d="M4 16a8 8 0 1 1 16 0" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M12 16l4-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>Live</button>
     <button data-view="report"><svg viewBox="0 0 24 24"><path d="M5 19V9M10 19V5M15 19v-7M20 19v-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>Report</button>
     <button data-view="history"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M12 8v4l3 2" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" /></svg>History</button>
-    <button data-view="wrongside"><svg viewBox="0 0 24 24"><path d="M12 3l9 16H3z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" /><path d="M12 10v4M12 16.5v.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>Wrong-side</button>
+    <button data-view="wrongside"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" /><circle cx="12" cy="13" r="3.5" fill="none" stroke="currentColor" strokeWidth="2" /></svg>Camera</button>
     <button data-view="setup"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>Setup</button>
   </nav>
 

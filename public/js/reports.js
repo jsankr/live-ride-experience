@@ -53,11 +53,47 @@ export class EvidenceCamera {
     }, 700); // a frame every 0.7 s: less JPEG work (heat) than every 0.5 s
   }
 
-  grab(quality = 0.78) {
+  // Point the camera's focus at a spot (0..1 of the picture) where the browser allows it
+  // (Chrome on Android). iPhone browsers expose no focus control: the camera keeps its own
+  // continuous autofocus there. Returns true when the focus was moved.
+  async focusAt(nx, ny) {
+    const track = this.stream?.getVideoTracks()[0];
+    const caps = track?.getCapabilities?.() || {};
+    const advanced = {};
+    if (caps.pointsOfInterest !== undefined || 'pointsOfInterest' in caps) advanced.pointsOfInterest = [{ x: nx, y: ny }];
+    if (caps.focusMode?.includes('single-shot')) advanced.focusMode = 'single-shot';
+    else if (caps.focusMode?.includes('continuous')) advanced.focusMode = 'continuous';
+    if (!Object.keys(advanced).length) return false;
+    try {
+      await track.applyConstraints({ advanced: [advanced] });
+      clearTimeout(this.refocus);
+      this.refocus = setTimeout(() => { if (caps.focusMode?.includes('continuous')) track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {}); }, 2500);
+      return !!advanced.pointsOfInterest;
+    } catch { return false; }
+  }
+
+  // Optical zoom toward a detected vehicle where the camera allows it (some Android phones;
+  // iPhone Safari offers zoom only on recent iOS versions). Phone zoom always crops the CENTRE,
+  // so the level is chosen to keep the whole vehicle in view. Returns { zoom, restore } or null.
+  async zoomFor([bx, by, bw, bh]) {
+    const track = this.stream?.getVideoTracks()[0];
+    const caps = track?.getCapabilities?.() || {};
+    if (!caps.zoom?.max || caps.zoom.max <= 1) return null;
+    const before = track.getSettings?.().zoom ?? caps.zoom.min ?? 1;
+    const reach = Math.max(Math.abs(bx - 0.5), Math.abs(bx + bw - 0.5), Math.abs(by - 0.5), Math.abs(by + bh - 0.5));
+    const z = Math.min(caps.zoom.max, 3, 0.48 / Math.max(reach, 0.05));
+    if (z < 1.25) return null; // vehicle too close to the edge for centre zoom to help
+    try {
+      await track.applyConstraints({ advanced: [{ zoom: z }] });
+      return { zoom: +z.toFixed(2), restore: () => track.applyConstraints({ advanced: [{ zoom: before }] }).catch(() => {}) };
+    } catch { return null; }
+  }
+
+  grab(quality = 0.78, maxSide = 1920) {
     const v = this.video;
     if (!this.stream || !v.videoWidth) return Promise.resolve(null);
     const t = Date.now();
-    const size = Math.min(1, 1920 / v.videoWidth, 1920 / v.videoHeight);
+    const size = Math.min(1, maxSide / v.videoWidth, maxSide / v.videoHeight);
     const width = Math.round(v.videoWidth * size);
     const height = Math.round(v.videoHeight * size);
     if (this.canvas.width !== width || this.canvas.height !== height) {
@@ -75,13 +111,15 @@ export class EvidenceCamera {
     return new Promise((resolve) => this.canvas.toBlob((blob) => resolve(blob ? { blob, t, sharpness } : null), 'image/jpeg', quality));
   }
 
+  // full camera resolution for the frames after the trigger: crops of a distant vehicle,
+  // its rider and plate come from these, so every pixel counts (digital zoom)
   async burst() {
     const frames = this.ring.filter((frame) => Date.now() - frame.t <= 4250);
-    const now = await this.grab(0.92);
+    const now = await this.grab(0.92, 4096);
     if (now) frames.push(now);
     for (let i = 0; i < 3; i++) {
       await new Promise((resolve) => setTimeout(resolve, 250));
-      const frame = await this.grab(0.88);
+      const frame = await this.grab(0.9, 4096);
       if (frame) frames.push(frame);
     }
     const best = frames.reduce((sharpest, frame) => !sharpest || frame.sharpness >= sharpest.sharpness ? frame : sharpest, null);

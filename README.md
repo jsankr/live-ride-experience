@@ -27,6 +27,23 @@ Green marks lower readings, yellow marks caution, and red marks elevated risk. R
 
 Ride reports include a road-comfort map with clustered events, a heuristic score, speed, braking, roughness, elevation, lean, engine and clutch charts, and a full event log. Export JSON, CSV, or GPX. Saved rides and wrong-side reports are available from the bottom navigation.
 
+**End of every ride: two report files.** *Report → Ride reports* makes two small, self-contained HTML files that open on any phone or computer, offline:
+1. **Road report:** how the road was, then every pothole, speed breaker, rough stretch and hard brake with time, severity, speed and a Google Maps link. It also has a route sketch, and notes on anything that makes the numbers less certain (a shaking mount, recording gaps).
+2. **Wrong-side report:** every vehicle that came at you on the wrong side. Each one has:
+   - the evidence photo, stamped with date, time, GPS and your speed;
+   - vehicle, rider, head and number-plate snapshots;
+   - the plate, colour and type, and the measured direction and speed;
+   - the helmet estimate for two-wheelers.
+
+   It is made for submitting to traffic police. *Wrong-side → Police report* makes the same file for all reports.
+
+**Storage SOP (Setup → Compact storage, on by default):**
+- When an evidence report has been analysed, only its key photo and the snapshots are kept.
+- When a ride ends, plain dashcam video of that ride is deleted. Locked incident clips (crash, fall, emergency braking, wrong-side, manual capture) are kept.
+- Raw sensor logging stays off unless you turn it on.
+
+**Re-analyse** on a saved ride redoes potholes, breakers, rough stretches, hard braking/acceleration, crash and fall with the current rules (it needs the raw sensor log).
+
 ## Run it on your phone (no laptop)
 RideLens runs entirely in the phone's browser. Rides and reports are stored on the phone (IndexedDB) and the ride tools keep working offline once loaded. Weather updates and uncached basemap tiles need a network connection.
 
@@ -76,16 +93,41 @@ The Trip card shows:
   - Opening either app sends RideLens to the background, where browsers pause its sensors.
 
 ## Hands-free wrong-side detection
-Turn on the camera in **Wrong-side** with the phone facing the road. With **Hands-free** ticked, RideLens watches by itself.
+Turn on the camera in **Wrong-side** with the phone facing the road. It opens **full screen**: the live picture fills the phone, and everything is drawn over it on a transparent heads-up display.
+- **Status:** dashcam REC, watch status, GPS, clock, speed, and this ride's wrong-side / pothole / breaker counts.
+- **Buttons:** Exit, Auto-detect, Voice, Dashcam, and Start/Stop ride. There is no tap-to-capture while riding: capture is fully automatic. *Capture now (when parked)* on the Camera card remains for use off the bike.
+- **Discreet (Setup, on by default):** vehicles get camera-style focus brackets with no labels, counters say "captures" and alerts say "✓ Saved". People nearby can't tell what is being recorded. The tab is called **Camera**.
+- **Auto zoom and focus on each detection:**
+  1. **Optical zoom** toward the vehicle (up to 3×), where the phone exposes zoom to web pages. Phones zoom only the centre, so the level keeps the whole vehicle in view. Detection pauses for that second.
+  2. **Focus** moved onto the vehicle (Chrome on Android).
+  3. A **full-resolution burst**; zoom and focus then return to normal.
+  4. A 4-second **zoom preview** of the vehicle on the HUD.
+
+  iPhone browsers have no focus control and may have no zoom control. There, the digital crop from the full-resolution frames is the zoom.
+- **Voice commands (Setup → Voice commands):**
+  - Screens: "camera", "live", "report", "history", "setup".
+  - Controls: "start ride", "stop ride", "full screen", "exit full screen", "camera on/off", "dashcam on/off".
+  - Optional wake word: "RideLens report".
+  - The listener restarts itself. It uses the browser's speech recognition: Chrome on Android, or Safari with Dictation enabled. Wind noise at speed makes it unreliable without a helmet headset microphone.
+
+With **Hands-free** ticked, RideLens watches by itself.
 
 **Keep-left India (the default):** only vehicles **coming toward you on your left** count, i.e. between you and the kerb, or dead ahead (≤ 0.2 m right of your line). Oncoming traffic on your right is legitimate and ignored. Switch to keep-right in Setup if needed.
 - **What it looks at:** only your side of the picture (the left 62%, from the kerb to just past the centre). Everything else is simply recorded by the dashcam, with no live analysis.
 - **How it decides:** distance comes from the vehicle's apparent width. Its own speed toward you is its closing speed minus your GPS speed, so parked vehicles and traffic you're catching up to don't count.
+- **Only vehicles driving toward you (front view):** the vehicle must close in faster than you are moving, by at least 12 km/h and by a quarter of your own speed. That margin covers the ±25 % error of distance-from-width. A same-direction vehicle you overtake shows its rear and closes slower than your speed, so it never counts.
+- **Strict evidence:** the vehicle must be seen at least 3 times over 0.6 s, approaching steadily (distances on a straight line, R² ≥ 0.6), 4–30 m away, and not cut off by the picture edge. GPS speed is required: without it, oncoming and slower traffic look the same, so nothing is flagged. Your 26 Nov ride raised 75 alerts in 25 km under the old rules; 8 of them meet these.
 - **When it triggers:** it fires within 30 m. The burst capture includes the 4 s before, and vehicle type, colour and plate are read automatically. The report is tagged **AUTO**.
 - **Heat:**
   - check rate: every 1.2 s when stopped, 0.5 s when moving, 0.3 s while a vehicle is near on your side;
   - never faster than 2× the time a check takes, so a hot, throttled phone automatically does less;
   - dashcam stamp drawn at 20 fps; pre-roll frame every 0.7 s.
+- **Evidence analysis (once per detection, on the saved photos only, so no extra heat while riding):**
+  - **Focus and zoom:** the camera focus is moved onto the vehicle where the browser allows it (Chrome on Android). iPhone browsers give web pages no focus control, so the camera's own autofocus is used there. Frames after the trigger are kept at full camera resolution, and the vehicle, rider and plate are cropped from them (digital zoom).
+  - **Number plate:** found by a YOLOv9-t plate detector ([open-image-models](https://github.com/ankandrew/open-image-models), MIT), then read by OCR on just that strip and checked against Indian formats.
+  - **Helmet (two-wheelers):** the EfficientNet-B0 `helmet_v5` classifier ([vivekvar/helmet-v5](https://huggingface.co/vivekvar/helmet-v5), Apache-2.0, trained on Indian traffic-camera crops; 81 % validation accuracy) on the rider's head, averaged over the frames. It's shown as *likely helmet / likely no helmet / unclear* with its probability.
+  - **Not assessed:** seat belts (not visible through a windscreen at road distance, and no tested model exists for this view) and mirrors (no public model). The report says so instead of guessing.
+  - **How it runs:** the models are in `public/models/` (24 MB). They are downloaded once and cached on the phone, and run with ONNX Runtime Web.
 - **Limit:** catching fast vehicles needs several checks per second. On this project's CPU-only test machine (~1 check/s), a car closing at 29 km/h was captured and one at 43 km/h was missed. On a phone using its graphics chip it should be several times faster, but that's **unmeasured**.
 
 ## Potholes, speed breakers and rough stretches
@@ -100,6 +142,10 @@ On simulated rides: smooth roads count potholes and breakers within ±1. Rough r
 
 **Maps:** the ride report map filters All / Potholes / Breakers / Rough. *History → Road hazard map* merges potholes and breakers from all rides (within 15 m), marks spots hit on more than one ride, lists the worst with Google Maps links, and exports GeoJSON/CSV. Rides recorded with the old detector (before 25 Nov 2026, 22:00 IST) are left off the map unless you tick *Include rides recorded with the old detector*.
 
+**Hard braking and acceleration** must show in the GPS/OBD speed too: the speed has to change by ≥ 4 km/h (and by half of what the accelerometer implies) within 2.5 s. Otherwise it was handlebar vibration.
+
+**Mount shake:** the report warns when the phone shakes more than 1 m/s² even on the smoothest quarter of the ride. A firm mount reads about 0.3–0.6. The 26 Nov ride read 1.4, which makes pothole counts unreliable; use a vibration-damped mount.
+
 A pothole's dip must come within 0.2 s before the slam. An earlier dip is fork dive from braking for a speed breaker, which had made breakers count as potholes.
 
 ## Dashcam
@@ -109,7 +155,7 @@ A pothole's dip must come within 0.2 s before the slam. An earlier dip is fork d
 - **Retention:** recordings are kept for 1, 3, 5 (default) or 7 days, then overwritten. The oldest are also removed early if the browser's storage allowance runs low.
 - **Quality and space:** 480p is about 0.5 GB/hour, 720p about 1.1 GB/hour, 1080p about 2 GB/hour, and 4K (default) about 7 GB/hour. These are estimates from the bitrates used. 4K is requested from the camera, and the card shows the resolution actually delivered: phone browsers often give web pages no more than 1080p.
 - **Incidents** lock the footage from 30 s before to 30 s after, and those clips are never overwritten. Triggers:
-  - crash-level impact (≥ 4 g);
+  - crash-level impact (≥ 4 g, **and** within 6 s the bike nearly stops or falls over: a handlebar phone sees 4–6 g spikes at speed from vibration alone, as all 30 'crashes' on the 26 Nov ride were);
   - the bike lying on its side for 1.5 s;
   - emergency braking (≥ 0.6 g);
   - a wrong-side vehicle;
@@ -117,6 +163,11 @@ A pothole's dip must come within 0.2 s before the slam. An earlier dip is fork d
 
   Each incident stores the time, GPS, your speed and heading, and (when the camera can read them) the other vehicle's type, colour, number plate and closing speed. The sensor triggers (impact, fall, braking) need **Start ride**.
 - **Saving a copy:** each clip's **Save** button opens the phone's share sheet: Save Video / Save to Files, iCloud Drive, Google Drive, OneDrive. A web app can't write into Photos or cloud folders by itself. Automatic cloud upload would need your own Google/Microsoft app registration; iCloud has no public upload API.
+- **Bulk delete:** tap **Select to delete**, then do either of these:
+  - pick a day and a time (whole day, morning 05–12, afternoon 12–17, evening 17–22, night 22–05, or a custom from–to) and tap **Select this range**;
+  - tick whole days or single clips while scrolling.
+
+  Locked incident clips are left out unless you tick *Also select locked incident clips*. Delete asks once, on the page.
 - **Limit:** like every camera feature, recording stops whenever RideLens isn't on screen.
 
 ## Precise destinations

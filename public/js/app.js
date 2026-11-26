@@ -3,7 +3,9 @@ import { setupEvidenceLocation } from './evidence-location.js';
 import { analyzeEvidence, loadDetector, readPlateCrop } from './evidence-analysis.js';
 import { startAutoWatch } from './wrongside-watch.js';
 import { createYouTubePlayer, parseYouTubeLink } from './ytplayer.js';
-import { Dashcam, fileName, retention, overlapping, stamp } from './dashcam.js';
+import { summarizeRoad, summarizeWrongSide, roadReportHtml, wrongSideReportHtml, blobToDataUrl, stampedSnapshot } from './ride-reports.js';
+import { parseCommand, startVoice, voiceSupported } from './voice.js';
+import { Dashcam, fileName, retention, overlapping, stamp, clipsInRange, DAY_PARTS } from './dashcam.js';
 import { mergeHazards, hazardsGeoJson, hazardsCsv } from './hazards.js';
 import { createAnalyzer, comfortClass, comfortLegend } from './analytics.js';
 import { Elm327, bleTransport, wsTransport } from './obd.js';
@@ -18,7 +20,7 @@ const G = 9.80665;
 
 // ---------------- settings ----------------
 const settings = (() => {
-  const def = { protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: '', keepSide: 'left', autoWatch: true, ytLink: '', dashcam: true, dcDays: '5', dcQuality: '2160', w3wKey: '', rawLog: false };
+  const def = { camFull: true, compact: true, discreet: true, voiceOn: false, voiceWake: false, protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: '', keepSide: 'left', autoWatch: true, ytLink: '', dashcam: true, dcDays: '5', dcQuality: '2160', w3wKey: '', rawLog: false };
   try {
     const v = { ...def, ...JSON.parse(localStorage.getItem('ridelens.settings') || '{}') };
     if (typeof v.invertYaw === 'boolean') v.invertYaw = v.invertYaw ? 'invert' : ''; // migrate old checkbox
@@ -216,13 +218,20 @@ async function stopRide() {
   const ride = packRide(rideId, analyzer);
   if (ride.summary.distanceKm < 0.05 && ride.timeline.length < 20) { toast('Ride too short to save'); return; }
   await db.put('rides', ride);
-  toast('Ride saved');
+  // storage SOP: after the ride keep the reports and incident footage, not hours of plain video
+  let note = '';
+  if (settings.compact) {
+    const clips = (await db.all('clips')).filter((c) => c.start >= ride.summary.startT - 60000 && !c.locked);
+    for (const c of clips) { await db.del('clipData', c.id); await db.del('clips', c.id); }
+    if (clips.length) note = ` · freed ${(clips.reduce((a, c) => a + c.size, 0) / 1e6).toFixed(0)} MB of plain video, incident clips kept`;
+  }
+  toast(`Ride saved · reports ready${note}`, 5000);
   openRide(ride);
 }
 
 function packRide(id, an) {
   return {
-    id, savedAt: Date.now(), detector: 2,
+    id, savedAt: Date.now(), detector: 3,
     ...(rawImu?.length ? { raw: { v: 1, t0: rawImu.t0, imu: rawImu } } : {}),
     summary: an.summary(), events: an.events, track: an.track, timeline: an.timeline,
     gears: an.gears,
@@ -395,6 +404,9 @@ bind('serverUrl', 'serverUrl', 'input');
 bind('serverToken', 'serverToken', 'input');
 bind('units', 'units');
 bind('rawLog', 'rawLog');
+bind('compact', 'compact');
+bind('camFullSet', 'camFull');
+bind('discreet', 'discreet');
 bind('keepSide', 'keepSide', 'change', () => { if (autoStop) { stopAuto(); startAuto(); } });
 bind('w3wKey', 'w3wKey', 'input');
 bind('theme', 'theme', 'change', applyTheme);
@@ -428,7 +440,50 @@ function insights(ride) {
 function stat(label, val, unit = '') { return `<div class="stat"><div class="label">${label}</div><div class="val">${val}${unit ? `<small>${unit}</small>` : ''}</div></div>`; }
 
 let currentRide = null;
-function openRide(ride) { show('report'); currentRide = ride; renderReport(ride); }
+function openRide(ride) { show('report'); currentRide = ride; renderReport(ride); wireRideDocs(ride); }
+
+// ---------------- end-of-ride reports ----------------
+async function rideWrongSide(ride) {
+  const s = ride.summary;
+  return (await db.all('reports')).filter((r) => r.rideId === ride.id || (!r.rideId && r.t >= s.startT && r.t <= (s.endT || s.startT) + 60000));
+}
+async function wireRideDocs(ride) {
+  const reps = await rideWrongSide(ride);
+  const sum = summarizeRoad(ride);
+  if (!$('rideDocsInfo')) return;
+  $('rideDocsInfo').textContent = `${sum.counts.potholes} potholes · ${sum.counts.bumps} breakers · ${reps.length} wrong-side`;
+  $('wsDocBtn').textContent = `Wrong-side report (${reps.length})`;
+  $('rideDocs').onclick = async (e) => {
+    const kind = e.target.closest('[data-doc]')?.dataset.doc; if (!kind) return;
+    const day = stamp(ride.summary.startT).slice(0, 16).replace(' ', '_').replace(':', '-');
+    if (kind === 'road') return shareDoc(`RideLens_road_${day}.html`, roadReportHtml(ride, sum));
+    toast('Preparing snapshots…');
+    const wsum = summarizeWrongSide(reps.filter((r) => r.status !== 'dismissed'));
+    shareDoc(`RideLens_wrong-side_${day}.html`, wrongSideReportHtml(ride, wsum, await reportImages(wsum.list)));
+  };
+}
+async function reportImages(list) {
+  const out = {};
+  for (const r of list) {
+    const im = {}, p = r.photos[r.keyPhoto] || r.photos[0];
+    if (p?.blob) {
+      const lines = [`${stamp(r.t)}  ·  ${r.lat != null ? `${r.lat.toFixed(6)}, ${r.lon.toFixed(6)} (±${Math.round(r.accuracy || 0)} m)` : 'no GPS fix'}`,
+        `${r.auto ? `Wrong-side ${(r.vehicleType || r.auto.type || 'vehicle').toLowerCase()} coming toward rider on the ${r.auto.keep === 'right' ? 'right' : 'left'}` : 'Captured by rider'}  ·  rider ${r.mySpeedKmh ?? '—'} km/h  ·  RideLens`];
+      const stamped = await stampedSnapshot(p.blob, lines).catch(() => null);
+      im.snapshot = await blobToDataUrl(stamped || p.blob);
+    }
+    for (const k of ['vehicle', 'rider', 'head', 'plate']) if (r.analysis?.crops?.[k]) im[k] = await blobToDataUrl(r.analysis.crops[k]);
+    out[r.id] = im;
+  }
+  return out;
+}
+async function shareDoc(name, html) {
+  const file = new File([html], name, { type: 'text/html' });
+  try {
+    if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; }
+  } catch (e) { if (e?.name === 'AbortError') return; }
+  download(name, file);
+}
 let resizeT;
 window.addEventListener('resize', () => {
   clearTimeout(resizeT);
@@ -526,8 +581,14 @@ function renderReport(ride) {
         <h2>${new Date(s.startT).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</h2>
         <div class="muted"><span class="status-pill ${st}">${word}</span> · heuristic score · smoothness ${s.scores.smooth} · braking ${s.scores.braking} · shifting ${s.scores.shifting ?? '—'}</div>
       </div>
-      <span class="actions"><button class="ghost" data-x="json">JSON</button><button class="ghost" data-x="csv">CSV</button><button class="ghost" data-x="gpx">GPX</button>${ride.raw ? '<button class="ghost" data-x="reanalyse">Re-analyse road</button>' : ''}</span>
+      <span class="actions"><button class="ghost" data-x="json">JSON</button><button class="ghost" data-x="csv">CSV</button><button class="ghost" data-x="gpx">GPX</button>${ride.raw ? '<button class="ghost" data-x="reanalyse">Re-analyse</button>' : ''}</span>
     </div>
+    <article class="card ride-docs" id="rideDocs">
+      <div class="card-head"><h3>Ride reports</h3><span class="muted" id="rideDocsInfo"></span></div>
+      <div class="row"><button data-doc="road">Road report</button><button data-doc="ws" id="wsDocBtn">Wrong-side report</button></div>
+      <p class="fine">Two small files to keep or send: the road (potholes, breakers, rough stretches with GPS) and the wrong-side vehicles (snapshots, plate, vehicle, rider, GPS) for traffic police. Save them to Files, iCloud Drive or Google Drive from the share sheet.</p>
+    </article>
+    ${s.mountShake != null && s.mountShake > 1 ? `<p class="banner">The phone shook ${s.mountShake} m/s² even on smooth road (a firm mount reads 0.3–0.6). Road event counts are less reliable on this ride: use a vibration-damped mount.</p>` : ''}
     <div class="stats">
       ${stat('Distance', fmtDist(s.distanceKm))}
       ${stat('Duration', fmtDur(dur))}
@@ -671,19 +732,24 @@ function reanalyseRoadEvents(ride) {
     }
     an.pushImu(t, { x: ax, y: ay, z: az }, gx == null ? null : { x: gx, y: gy, z: gz });
   }
-  const road = an.events.filter((e) => ['pothole', 'bump', 'rough'].includes(e.type));
-  const events = [...ride.events.filter((e) => !['pothole', 'bump', 'rough'].includes(e.type)), ...road].sort((a, b) => a.t - b.t);
-  const count = (tp) => road.filter((e) => e.type === tp).length;
-  return { ...ride, events, summary: { ...ride.summary, potholes: count('pothole'), bumps: count('bump'), roughStretches: count('rough') }, reanalysedAt: Date.now() };
+  // everything the motion sensors decide is redone with the current rules (road events, hard
+  // braking / acceleration, crash and fall); wrong-side reports, gaps and gear changes are kept
+  const REDO = ['pothole', 'bump', 'rough', 'brake', 'accel', 'crash', 'fall'];
+  const redone = an.events.filter((e) => REDO.includes(e.type));
+  const events = [...ride.events.filter((e) => !REDO.includes(e.type)), ...redone].sort((a, b) => a.t - b.t);
+  const count = (tp) => redone.filter((e) => e.type === tp).length;
+  const fresh = an.summary();
+  return { ...ride, events, detector: 3, summary: { ...ride.summary, potholes: count('pothole'), bumps: count('bump'), roughStretches: count('rough'),
+    hardBrakes: count('brake'), hardAccels: count('accel'), mountShake: fresh.mountShake, scores: { ...ride.summary.scores, ...fresh.scores, shifting: ride.summary.scores?.shifting ?? fresh.scores.shifting } }, reanalysedAt: Date.now() };
 }
 async function reanalyseRoad(ride) {
   toast('Re-analysing road events…');
   await new Promise((r) => setTimeout(r, 30));
-  const before = `${ride.summary.potholes} potholes, ${ride.summary.bumps} breakers`;
+  const before = `${ride.summary.potholes} potholes, ${ride.summary.bumps} breakers, ${ride.summary.hardBrakes} hard brakes, ${ride.events.filter((e) => e.type === 'crash').length} crash alerts`;
   const updated = reanalyseRoadEvents(ride);
   await db.put('rides', updated);
-  renderReport(updated);
-  toast(`Was ${before} → now ${updated.summary.potholes} potholes, ${updated.summary.bumps} breakers, ${updated.summary.roughStretches} rough stretches`, 6000);
+  currentRide = updated; renderReport(updated); wireRideDocs(updated);
+  toast(`Was ${before} → now ${updated.summary.potholes} potholes, ${updated.summary.bumps} breakers, ${updated.summary.hardBrakes} hard brakes, ${updated.events.filter((e) => e.type === 'crash').length} crash alerts`, 7000);
 }
 
 async function renderHistory() {
@@ -736,6 +802,19 @@ function saveAnalysis(id, analysis) {
     };
   });
 }
+// Storage SOP: once a report is analysed, keep only what a police complaint needs (the key
+// photo plus the vehicle, rider and plate snapshots); the rest of the photo burst is dropped.
+async function compactReport(id) {
+  await db.updateReport(id, (r) => {
+    if (r.compacted || !r.analysis || r.analysis.status === 'pending') return r;
+    const keep = r.analysis.vehicle?.frame ?? r.keyPhoto ?? 0;
+    const ph = r.photos[keep] || r.photos[r.keyPhoto] || r.photos[0];
+    const a = r.analysis;
+    return { ...r, photos: ph ? [{ ...ph, key: true }] : [], keyPhoto: 0, compacted: true,
+      analysis: { ...a, vehicle: a.vehicle && { ...a.vehicle, frame: 0 }, plate: a.plate && { ...a.plate, frame: 0 } } };
+  });
+}
+
 async function setCamera(on) {
   if (cameraChanging) return;
   cameraChanging = true;
@@ -749,11 +828,132 @@ async function setCamera(on) {
     if (on && settings.autoWatch) startAuto(); else stopAuto();
     if (on && settings.dashcam) startDashcam(); else stopDashcam();
     $('camOff').hidden = on; $('captureBtn').disabled = !on;
+    if (!on && immersive) setImmersive(false);
     $('camToggle').textContent = on ? 'Stop camera' : 'Start camera';
   } catch (e) { camera.stop(); toast(`Camera: ${e.message}`, 4000); }
   finally { cameraChanging = false; $('camToggle').disabled = false; }
 }
-$('camToggle').addEventListener('click', () => setCamera(!camOn));
+$('camToggle').addEventListener('click', async () => {
+  const turningOn = !camOn;
+  await setCamera(turningOn);
+  if (turningOn && camOn && settings.camFull !== false) setImmersive(true); // full screen is the default riding view
+});
+
+// ---------------- full-screen camera with transparent HUD ----------------
+let immersive = false, hudTimer = null, hudAlertTimer = null;
+function setImmersive(on) {
+  immersive = on;
+  document.body.classList.toggle('immersive', on);
+  $('hud').hidden = !on;
+  clearInterval(hudTimer);
+  if (on) {
+    $('camBox').requestFullscreen?.({ navigationUI: 'hide' }).catch(() => {}); // Android; iPhone keeps the page view
+    updateHud(); hudTimer = setInterval(updateHud, 500);
+  } else if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+}
+function updateHud() {
+  const sn = analyzer.snapshot();
+  const fresh = sn.fix && Date.now() - (sn.fix.t ?? 0) < 5000;
+  $('hudSpeed').textContent = fresh || sn.speedSrc === 'obd' ? fmtSpeed(sn.speedKmh) : '—';
+  $('hudUnit').textContent = speedUnit();
+  $('hudGps').textContent = fresh ? `GPS ±${Math.round(sn.fix.accuracy ?? 0)} m` : 'GPS —';
+  $('hudGps').classList.toggle('warn', !fresh);
+  $('hudClock').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const rec = !!dashcam;
+  $('hudRec').classList.toggle('on', rec);
+  $('hudRecText').textContent = rec ? `REC ${dashcam.canvas ? `${Math.min(dashcam.canvas.width, dashcam.canvas.height)}p` : ''}` : 'Dashcam off';
+  const st = window.__autoWatchStatus;
+  const side = settings.keepSide === 'right' ? 'right' : 'left';
+  const quiet = settings.discreet !== false;
+  $('hudWatch').textContent = !autoStop ? (quiet ? 'Auto off' : 'Auto-detect off') : st?.error ? (quiet ? 'Auto unavailable' : 'Detector unavailable')
+    : st ? (quiet ? 'Auto' : `Watching ${side} · ${st.vehicles} vehicle${st.vehicles === 1 ? '' : 's'}`) : 'Starting…';
+  $('hudVoice').setAttribute('aria-pressed', String(!!voiceStop));
+  $('hudWatch').classList.toggle('warn', !!st?.error || (autoStop && st && sn.speedSrc === 'none'));
+  const ev = analyzer.events;
+  $('hudWs').textContent = recording ? ev.filter((e) => e.type === 'wrongside').length : '—';
+  $('hudPot').textContent = recording ? ev.filter((e) => e.type === 'pothole').length : '—';
+  $('hudBump').textContent = recording ? ev.filter((e) => e.type === 'bump').length : '—';
+  const km = recording ? analyzer.summary().distanceKm : 0;
+  $('hudDist').textContent = (imperial() ? km * 0.621371 : km).toFixed(1); $('hudDistUnit').textContent = imperial() ? 'mi' : 'km';
+  $('hudAuto').setAttribute('aria-pressed', String(!!autoStop));
+  $('hudDash').setAttribute('aria-pressed', String(settings.dashcam !== false));
+  $('hudRide').setAttribute('aria-pressed', String(recording)); $('hudRideText').textContent = recording ? 'Stop ride' : 'Start ride';
+}
+let evidenceBusy = false, zoomTimer = null;
+// "Auto zoom" view: the detected vehicle, cropped from the full-resolution frame, shown for 4 s
+async function showZoomInset(frames, box, z) {
+  if (!immersive || !frames?.length) return;
+  const f = frames.find((x) => x.t >= Date.now() - 1500) || frames[frames.length - 1];
+  try {
+    const img = await createImageBitmap(f.blob);
+    // box is in the un-zoomed picture; map it into the zoomed frame, then pad it
+    const m = (v) => 0.5 + (v - 0.5) * z;
+    const [bx, by, bw, bh] = box, x0 = m(bx), y0 = m(by), w = bw * z, h = bh * z;
+    const pad = 0.35, sx = Math.max(0, (x0 - w * pad) * img.width), sy = Math.max(0, (y0 - h * pad) * img.height);
+    const sw = Math.min(img.width - sx, w * (1 + 2 * pad) * img.width), sh = Math.min(img.height - sy, h * (1 + 2 * pad) * img.height);
+    const c = document.createElement('canvas'); c.width = 480; c.height = Math.max(60, Math.round(480 * sh / Math.max(1, sw)));
+    c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height); img.close();
+    $('hudZoomImg').src = c.toDataURL('image/jpeg', 0.8);
+    $('hudZoomTxt').textContent = settings.discreet !== false ? `Focus ${z > 1 ? `${z.toFixed(1)}× ` : ''}✓` : `Auto zoom ${z > 1 ? `${z.toFixed(1)}× optical + ` : ''}digital crop`;
+    $('hudZoom').hidden = false;
+    clearTimeout(zoomTimer); zoomTimer = setTimeout(() => { $('hudZoom').hidden = true; }, 4000);
+  } catch { /* frame unreadable: skip the preview */ }
+}
+function hudAlert(text) {
+  if (!immersive) return;
+  const el = $('hudAlert'); el.textContent = text; el.hidden = false;
+  el.classList.toggle('quiet', settings.discreet !== false);
+  clearTimeout(hudAlertTimer); hudAlertTimer = setTimeout(() => { el.hidden = true; }, 4000);
+}
+// ---------------- voice commands ----------------
+let voiceStop = null, heardTimer = null;
+const VIEW_OF = { 'view:camera': 'wrongside', 'view:report': 'report', 'view:history': 'history', 'view:setup': 'setup', 'view:live': 'live' };
+async function runVoice(cmd) {
+  if (VIEW_OF[cmd]) {
+    if (cmd === 'view:camera') { show('wrongside'); if (camOn && settings.camFull !== false) setImmersive(true); }
+    else { if (immersive) setImmersive(false); show(VIEW_OF[cmd]); if (cmd === 'view:report' && currentRide) openRide(currentRide); }
+  } else if (cmd === 'full screen') { show('wrongside'); if (!camOn) await setCamera(true); if (camOn) setImmersive(true); }
+  else if (cmd === 'exit full screen') setImmersive(false);
+  else if (cmd === 'start ride') { if (!recording) $('recBtn').click(); }
+  else if (cmd === 'stop ride') { if (recording) $('recBtn').click(); }
+  else if (cmd === 'camera on') { if (!camOn) { await setCamera(true); if (camOn && settings.camFull !== false) setImmersive(true); } }
+  else if (cmd === 'camera off') { if (camOn) await setCamera(false); }
+  else if (cmd === 'dashcam on' || cmd === 'dashcam off') { const cb = $('dcOn'); if (cb.checked !== (cmd === 'dashcam on')) { cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); } }
+  const label = cmd.replace('view:', '');
+  if (immersive) { const h = $('hudHeard'); h.textContent = `🎙 ${label}`; h.hidden = false; clearTimeout(heardTimer); heardTimer = setTimeout(() => { h.hidden = true; }, 2000); updateHud(); }
+  else toast(`Voice: ${label}`, 1500);
+}
+function setVoice(on) {
+  voiceStop?.(); voiceStop = null;
+  if (on) {
+    voiceStop = startVoice({
+      requireWake: !!settings.voiceWake,
+      onCommand: (cmd) => runVoice(cmd).catch((e) => toast(e.message, 3000)),
+      onState: (st) => {
+        if (st.error) { $('voiceMsg').textContent = st.error; settings.voiceOn = false; $('voiceOn').checked = false; saveSettings(); voiceStop = null; }
+        else $('voiceMsg').textContent = st.listening ? 'Listening for commands…' : 'Voice commands on (restarting the listener)…';
+        if (immersive) updateHud();
+      },
+    });
+  } else $('voiceMsg').textContent = voiceSupported() ? '' : 'This browser has no speech recognition.';
+  if (immersive) updateHud();
+}
+$('voiceOn').checked = !!settings.voiceOn; $('voiceWake').checked = !!settings.voiceWake;
+// speech recognition must be started from a tap the first time (browser rule)
+$('voiceOn').addEventListener('change', (e) => { settings.voiceOn = e.target.checked; saveSettings(); setVoice(e.target.checked); });
+$('voiceWake').addEventListener('change', (e) => { settings.voiceWake = e.target.checked; saveSettings(); if (voiceStop) setVoice(true); });
+$('hudVoice').addEventListener('click', () => { settings.voiceOn = !voiceStop; $('voiceOn').checked = settings.voiceOn; saveSettings(); setVoice(settings.voiceOn); });
+if (!voiceSupported()) { $('voiceMsg').textContent = 'This browser has no speech recognition.'; }
+else if (settings.voiceOn) document.addEventListener('pointerdown', () => { if (settings.voiceOn && !voiceStop) setVoice(true); }, { once: true });
+window.__voice = { parseCommand, runVoice }; // for diagnostics/tests
+window.__autoCapture = (detection) => capture(detection); // diagnostics/tests: the path a hands-free detection takes
+$('camFull').addEventListener('click', async () => { if (!camOn) await setCamera(true); if (camOn) setImmersive(true); });
+$('hudExit').addEventListener('click', () => setImmersive(false));
+$('hudAuto').addEventListener('click', () => { const cb = $('autoWatch'); cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); updateHud(); });
+$('hudDash').addEventListener('click', () => { const cb = $('dcOn'); cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); updateHud(); });
+$('hudRide').addEventListener('click', () => { $('recBtn').click(); setTimeout(updateHud, 300); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && immersive) setImmersive(false); });
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && immersive && !document.body.classList.contains('immersive')) setImmersive(false); });
 
 async function capture(detection = null) {
   const fab = $('fab');
@@ -767,31 +967,48 @@ async function capture(detection = null) {
     if (!camOn) { await setCamera(true); await new Promise((r) => setTimeout(r, 700)); }
     if (!camOn) return;
     navigator.vibrate?.(60);
-    const [frames, fix] = await Promise.all([camera.burst(), evidenceLocation.fixAt(capturedAt)]);
+    // focus on the detected vehicle before the full-resolution frames are taken
+    let focused = false, zoomed = null;
+    if (detection?.box) {
+      const [bx, by, bw, bh] = detection.box;
+      evidenceBusy = true; // the detector pauses while the picture is zoomed
+      zoomed = await camera.zoomFor(detection.box);
+      // after a centre zoom the vehicle sits further from the centre by the zoom factor
+      const z = zoomed?.zoom || 1, cx = 0.5 + (bx + bw / 2 - 0.5) * z, cy = 0.5 + (by + bh / 2 - 0.5) * z;
+      focused = await camera.focusAt(Math.min(1, Math.max(0, cx)), Math.min(1, Math.max(0, cy)));
+      if (focused || zoomed) await new Promise((r) => setTimeout(r, zoomed ? 400 : 250));
+    }
+    let frames, fix;
+    try { [frames, fix] = await Promise.all([camera.burst(), evidenceLocation.fixAt(capturedAt)]); }
+    finally { zoomed?.restore(); evidenceBusy = false; }
+    if (detection?.box) showZoomInset(frames, detection.box, zoomed?.zoom || 1);
     if (!frames.length) throw new Error('No frames captured');
     const airQuality = fix && air?.cell === airCell(fix) && Math.abs(air.time - capturedAt) <= 90 * 60000 ? air : null;
     const speed = associatedRide && snap.speedSrc !== 'none' ? snap.speedKmh : null;
     let rep = await saveReport({ frames, snapshot: { fix, speedKmh: speed }, rideId: associatedRide, capturedAt, airQuality });
     if (detection) {
       // hands-free trigger: keep the measurements that caused it, pre-fill the vehicle type
-      rep = await db.updateReport(rep.id, (r) => ({ ...r, auto: detection, vehicleType: r.vehicleType || detection.type, notes: r.notes || `Auto-detected: ${detection.type} ~${detection.distanceM} m away, closing ${detection.closingKmh} km/h in your lane.` })) || rep;
+      rep = await db.updateReport(rep.id, (r) => ({ ...r, auto: { ...detection, focused, opticalZoom: zoomed?.zoom ?? null }, vehicleType: r.vehicleType || detection.type,
+        notes: r.notes || `Auto-detected: ${detection.type} coming toward you on your ${detection.keep === 'right' ? 'right' : 'left'} (wrong side), ~${detection.distanceM} m away, its own speed ~${detection.oncomingKmh} km/h toward you while you rode at ${detection.ownSpeedKmh ?? '?'} km/h.` })) || rep;
     }
     if (recording && rideId === associatedRide) {
       const ev = { id: rep.id, type: 'wrongside', t: rep.t, lat: rep.lat, lon: rep.lon, speedKmh: speed, severity: 'severe', auto: detection || undefined };
       analyzer.events.push(ev); onEvent(ev);
     }
     recordIncident(detection ? 'wrongside' : 'manual', { reportId: rep.id, auto: detection || undefined, t: capturedAt }, frames);
-    toast(detection ? `Wrong-side ${detection.type.toLowerCase()} detected · ${frames.length} photos saved` : `Saved ${frames.length} photos · analysing vehicle and plate`);
+    if (!immersive) toast(detection ? `Wrong-side ${detection.type.toLowerCase()} detected · ${frames.length} photos saved` : `Saved ${frames.length} photos · analysing vehicle and plate`);
     if (detection) navigator.vibrate?.([80, 60, 80]);
+    hudAlert(settings.discreet !== false ? '✓ Saved' : detection ? `Wrong-side ${detection.type.toLowerCase()} on your ${detection.keep === 'right' ? 'right' : 'left'} · ${detection.distanceM} m · photos saved` : `Captured ${frames.length} photos`);
     if (currentView === 'wrongside') renderReports();
     analysisQueue = analysisQueue.then(async () => {
       let timer;
       const partial = { status: 'partial', vehicle: null, plate: null };
       const analysis = await Promise.race([
-        analyzeEvidence(rep.photos).catch(() => partial),
+        analyzeEvidence(rep.photos, undefined, detection).catch(() => partial),
         new Promise((resolve) => { timer = setTimeout(() => resolve(partial), 45000); }),
       ]).finally(() => clearTimeout(timer));
       await saveAnalysis(rep.id, analysis);
+      if (settings.compact) await compactReport(rep.id);
       if (currentView === 'wrongside') renderReports();
     }).catch(() => {});
 
@@ -818,6 +1035,7 @@ function startAuto() {
   $('autoStatus').textContent = 'Loading vehicle detector…';
   autoStop = startAutoWatch({
     video: $('camVideo'), overlay: $('camOverlay'), loadDetector, keep: settings.keepSide || 'left',
+    isPaused: () => evidenceBusy, isDiscreet: () => immersive && settings.discreet !== false,
     getOwnSpeedKmh: () => { const sn = analyzer.snapshot(); return sn.speedSrc !== 'none' && Date.now() - (sn.fix?.t ?? 0) < 5000 ? sn.speedKmh : null; },
     onAlert: (d) => {
       const detection = { type: d.type, vehicleClass: d.vehicleClass, distanceM: d.distanceM, lateralM: d.lateralM, closingKmh: d.closingKmh,
@@ -891,6 +1109,32 @@ async function renderReports() {
   }
 }
 
+const cropUrls = new Map();
+function cropUrl(r, k) {
+  const b = r.analysis?.crops?.[k]; if (!b) return '';
+  const key = `${r.id}:${k}:${b.size}`;
+  if (!cropUrls.has(key)) cropUrls.set(key, URL.createObjectURL(b));
+  return cropUrls.get(key);
+}
+function cropsHtml(r) {
+  const parts = [['vehicle', 'Vehicle'], ['rider', 'Rider'], ['head', 'Head'], ['plate', 'Number plate']].filter(([k]) => r.analysis?.crops?.[k]);
+  if (!parts.length) return '';
+  return `<div class="crops">${parts.map(([k, label]) => `<figure><img src="${cropUrl(r, k)}" alt="${label} snapshot"><figcaption>${label}</figcaption></figure>`).join('')}</div>`;
+}
+function findingsHtml(r) {
+  const a = r.analysis || {}, au = r.auto;
+  const rows = [];
+  if (au) rows.push(['Direction', `Coming toward you on your ${au.keep === 'right' ? 'right' : 'left'} (front view): closed in at ${au.closingKmh} km/h while you rode at ${au.ownSpeedKmh ?? '?'} km/h, so it was moving ~${au.oncomingKmh} km/h toward you. Seen ${au.sightings}× over ${au.spanS ?? '?'} s.`]);
+  if (au) rows.push(['Camera focus', au.focused ? 'Moved to the vehicle before the photos' : 'Not adjustable in this browser (camera autofocus used)']);
+  if (a.vehicle) rows.push(['Vehicle', `${a.vehicle.color ? `${a.vehicle.color} ` : ''}${a.vehicle.type} (${Math.round(a.vehicle.confidence * 100)} %)${a.vehicle.riders ? ` · ${a.vehicle.riders} rider${a.vehicle.riders > 1 ? 's' : ''} seen` : ''}`]);
+  if (a.plate) rows.push(['Plate read', `${a.plate.value} (OCR ${Math.round(a.plate.confidence)} %${a.plate.detector ? `, plate found ${Math.round(a.plate.detector * 100)} %` : ''})`]);
+  else if (a.plateBox) rows.push(['Plate read', 'Plate found but not readable: check the plate snapshot']);
+  if (a.helmet) rows.push(['Helmet', a.helmet.verdict === 'not seen' ? (a.helmet.model === 'unavailable' ? 'Helmet model unavailable (offline?)' : 'Rider not visible clearly enough') : `${a.helmet.verdict === 'no helmet' ? 'Likely NO helmet' : a.helmet.verdict === 'helmet' ? 'Likely wearing a helmet' : 'Unclear'} (P(no helmet) ${a.helmet.p}, ${a.helmet.frames} frame${a.helmet.frames > 1 ? 's' : ''})`]);
+  for (const n of a.notAssessed || []) rows.push([n.item, n.why]);
+  if (!rows.length) return '';
+  return `<dl class="findings">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
+}
+
 function openReport(r) {
   if (!r) return;
   const { vehicle, plate } = r.analysis ?? {};
@@ -907,6 +1151,8 @@ function openReport(r) {
     </div>
     <p class="fine"><a id="rpPhotoLink" href="${urls[sel]}" target="_blank" rel="noopener">Open full-resolution photo</a></p>
     <div class="strip-photos">${urls.map((u, i) => `<img src="${u}" data-i="${i}" class="${i === sel ? 'sel' : ''}" alt="frame ${i + 1}">`).join('')}</div>
+    ${cropsHtml(r)}
+    ${findingsHtml(r)}
     <p class="fine">${new Date(r.t).toLocaleString()} · ${r.lat != null ? `<a href="https://maps.google.com/?q=${r.lat},${r.lon}" target="_blank" rel="noopener">${r.lat.toFixed(5)}, ${r.lon.toFixed(5)}</a> (±${Math.round(r.accuracy || 0)} m)` : 'no GPS fix'}${r.mySpeedKmh != null ? ` · you at ${fmtSpeed(r.mySpeedKmh)} ${speedUnit()}` : ''}</p>
     ${air ? `<p class="fine" data-tone="${airCategory(air.india_aqi).tone}">Air at capture · ${air.us_aqi != null ? `US AQI ${esc(air.us_aqi)}` : `India AQI ${esc(air.india_aqi ?? '—')}`} · Open-Meteo estimate</p>` : ''}
     ${r.analysis ? `<p class="fine">${r.analysis.status === 'pending' ? 'Analysis pending. Reopen to check results.' : r.analysis.status === 'partial' ? 'Some analysis was unavailable. Review the saved photos.' : 'Review automatic suggestions against the photos.'}</p>` : ''}
@@ -1052,6 +1298,13 @@ function openReport(r) {
   dlg.showModal();
 }
 
+$('wsDoc').addEventListener('click', async () => {
+  const reps = (await db.all('reports')).filter((r) => r.status !== 'dismissed');
+  if (!reps.length) { toast('No reports to include'); return; }
+  toast('Preparing snapshots…');
+  const sum = summarizeWrongSide(reps);
+  shareDoc(`RideLens_wrong-side_all_${stamp(Date.now()).slice(0, 10)}.html`, wrongSideReportHtml(null, sum, await reportImages(sum.list)));
+});
 $('wsCsv').addEventListener('click', async () => download('wrongside-reports.csv', reportsToCsv(await db.all('reports')), 'text/csv'));
 $('wsJson').addEventListener('click', async () => {
   const all = await Promise.all((await db.all('reports')).map((r) => reportToJson(r, { photos: 'all' })));
@@ -1384,14 +1637,72 @@ async function renderClips() {
   for (const c of clips) { const d = stamp(c.start).slice(0, 10); if (!byDay.has(d)) byDay.set(d, []); byDay.get(d).push(c); }
   const incText = (c) => incidents.filter((i) => i.t >= c.start - 30000 && i.t <= c.end + 30000).map((i) =>
     `${esc(i.label)}${i.ownSpeedKmh != null ? ` · you ${fmtSpeed(i.ownSpeedKmh)} ${speedUnit()}` : ''}${i.peakG ? ` · ${i.peakG} g` : ''}${i.other?.type ? ` · ${esc(i.other.color ? `${i.other.color} ` : '')}${esc(i.other.type)}` : ''}${i.other?.closingKmh ? ` closing ${i.other.closingKmh} km/h` : ''}${i.other?.plate ? ` · ${esc(i.other.plate)}` : ''}`).join('<br>');
-  $('dcList').innerHTML = clips.length ? [...byDay].map(([d, cs]) => `<div class="clip-day">${d}</div>` + cs.map((c) => `
-    <div class="clip ${c.locked ? 'locked' : ''}" data-id="${c.id}">
+  dcClips = clips;
+  for (const id of [...dcSel]) if (!clips.some((c) => c.id === id)) dcSel.delete(id);
+  const daySel = (cs) => cs.every((c) => dcSel.has(c.id));
+  $('dcList').classList.toggle('selecting', dcSelecting);
+  $('dcList').innerHTML = clips.length ? [...byDay].map(([d, cs]) => `<div class="clip-day">${dcSelecting ? `<input type="checkbox" data-day="${d}" aria-label="Select all of ${d}" ${daySel(cs) ? 'checked' : ''}>` : ''}${d} <span class="muted">· ${cs.length} files · ${(cs.reduce((a, c) => a + c.size, 0) / 1e6).toFixed(0)} MB</span></div>` + cs.map((c) => `
+    <div class="clip ${c.locked ? 'locked' : ''} ${dcSel.has(c.id) ? 'sel' : ''}" data-id="${c.id}">
+      ${dcSelecting ? `<input type="checkbox" data-pick="${c.id}" aria-label="Select ${stamp(c.start)}" ${dcSel.has(c.id) ? 'checked' : ''}>` : ''}
       <span><b>${c.locked ? '🔒 ' : ''}${stamp(c.start).slice(11)}–${stamp(c.end).slice(11)}</b> <span class="muted">${(c.size / 1e6).toFixed(1)} MB${c.maxSpeedKmh != null ? ` · max ${fmtSpeed(c.maxSpeedKmh)} ${speedUnit()}` : ''}</span>
         ${c.locked ? `<span class="inc">${incText(c) || esc((c.incidents || []).join(', '))}</span>` : ''}</span>
       <span class="actions"><button class="ghost" data-a="play">Play</button><button class="ghost" data-a="save">Save</button><button class="ghost" data-a="lock">${c.locked ? 'Unlock' : 'Lock'}</button><button class="ghost" data-a="del" aria-label="Delete">✕</button></span>
     </div>`).join('')).join('') : '<p class="empty">No recordings yet. Start the camera with Dashcam on.</p>';
+  // day picker for range selection
+  const days = [...byDay.keys()], cur = $('dcDay').value;
+  $('dcDay').innerHTML = days.map((d) => `<option ${d === cur ? 'selected' : ''}>${d}</option>`).join('');
+  refreshDcSel();
 }
+
+// ---- bulk delete: by day, time of day, custom range, or ticking clips ----
+let dcClips = [], dcSelecting = false;
+const dcSel = new Set();
+function refreshDcSel() {
+  const picked = dcClips.filter((c) => dcSel.has(c.id));
+  const mb = picked.reduce((a, c) => a + c.size, 0) / 1e6;
+  $('dcSelInfo').textContent = dcSelecting ? `${picked.length} selected · ${mb.toFixed(0)} MB${picked.some((c) => c.locked) ? ` · ${picked.filter((c) => c.locked).length} locked` : ''}` : '';
+  $('dcDelete').disabled = !picked.length;
+  $('dcDelete').textContent = picked.length ? `Delete ${picked.length} selected` : 'Delete selected';
+  $('dcConfirm').hidden = true;
+}
+$('dcSelect').addEventListener('click', () => {
+  dcSelecting = !dcSelecting; if (!dcSelecting) dcSel.clear();
+  $('dcSelect').setAttribute('aria-pressed', String(dcSelecting));
+  $('dcSelect').textContent = dcSelecting ? 'Done' : 'Select to delete';
+  $('dcBulk').hidden = !dcSelecting;
+  renderClips();
+});
+$('dcPart').addEventListener('change', () => { $('dcCustom').hidden = $('dcPart').value !== 'custom'; });
+$('dcPick').addEventListener('click', () => {
+  const part = $('dcPart').value;
+  const [from, to] = part === 'custom' ? [$('dcFrom').value || '00:00', $('dcTo').value || '24:00'] : DAY_PARTS[part];
+  const ids = clipsInRange(dcClips, { day: $('dcDay').value || null, from, to, includeLocked: $('dcInclLocked').checked });
+  ids.forEach((id) => dcSel.add(id));
+  toast(ids.length ? `${ids.length} clip${ids.length > 1 ? 's' : ''} selected` : 'No clips in that range');
+  renderClips();
+});
+$('dcAll').addEventListener('click', () => { dcClips.filter((c) => !c.locked || $('dcInclLocked').checked).forEach((c) => dcSel.add(c.id)); renderClips(); });
+$('dcNone').addEventListener('click', () => { dcSel.clear(); renderClips(); });
+$('dcDelete').addEventListener('click', () => {
+  const picked = dcClips.filter((c) => dcSel.has(c.id));
+  const locked = picked.filter((c) => c.locked).length;
+  $('dcConfirmText').textContent = `Delete ${picked.length} video file${picked.length > 1 ? 's' : ''} (${(picked.reduce((a, c) => a + c.size, 0) / 1e6).toFixed(0)} MB)${locked ? `, including ${locked} locked incident clip${locked > 1 ? 's' : ''}` : ''}? This cannot be undone.`;
+  $('dcConfirm').hidden = false;
+});
+$('dcConfirmNo').addEventListener('click', () => { $('dcConfirm').hidden = true; });
+$('dcConfirmYes').addEventListener('click', async () => {
+  const ids = [...dcSel];
+  for (const id of ids) { await db.del('clipData', id); await db.del('clips', id); }
+  dcSel.clear(); toast(`Deleted ${ids.length} file${ids.length > 1 ? 's' : ''}`);
+  renderClips();
+});
+$('dcList').addEventListener('change', (e) => {
+  const day = e.target.dataset?.day, pick = e.target.dataset?.pick;
+  if (day) { for (const c of dcClips) if (stamp(c.start).slice(0, 10) === day) { if (e.target.checked) dcSel.add(c.id); else dcSel.delete(c.id); } renderClips(); }
+  if (pick) { if (e.target.checked) dcSel.add(pick); else dcSel.delete(pick); renderClips(); }
+});
 $('dcList').addEventListener('click', async (e) => {
+  if (dcSelecting && !e.target.closest('button, input')) { const id = e.target.closest('.clip')?.dataset.id; if (id) { if (dcSel.has(id)) dcSel.delete(id); else dcSel.add(id); renderClips(); } return; }
   const a = e.target.closest('button[data-a]')?.dataset.a; const id = e.target.closest('.clip')?.dataset.id;
   if (!a || !id) return;
   const clip = await db.get('clips', id);

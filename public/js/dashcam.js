@@ -26,6 +26,25 @@ export function fileName(t, mime, tag = '') {
   return `RideLens_${stamp(t).replace(' ', '_').replace(/:/g, '-')}${tag ? `_${tag}` : ''}.${extFor(mime)}`;
 }
 
+// Time-of-day presets for bulk delete (local time, 24 h "HH:MM"; a range may wrap past midnight)
+export const DAY_PARTS = {
+  all: ['00:00', '24:00'], morning: ['05:00', '12:00'], afternoon: ['12:00', '17:00'],
+  evening: ['17:00', '22:00'], night: ['22:00', '05:00'],
+};
+// Clips (or the part of them) recorded on `day` ("YYYY-MM-DD", local) whose start falls in
+// [from, to). Locked (incident) clips are left out unless includeLocked is set.
+export function clipsInRange(clips, { day = null, from = '00:00', to = '24:00', includeLocked = false } = {}) {
+  const mins = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; };
+  const a = mins(from), b = mins(to);
+  return clips.filter((c) => {
+    if (c.locked && !includeLocked) return false;
+    const st = stamp(c.start);
+    if (day && st.slice(0, 10) !== day) return false;
+    const m = mins(st.slice(11, 16));
+    return a <= b ? m >= a && m < b : m >= a || m < b;
+  }).map((c) => c.id);
+}
+
 // Which clips to delete: unlocked clips older than `days`, then (if over the byte budget)
 // the oldest unlocked clips until under it. Locked clips are never deleted here.
 export function retention(clips, now, { days = 7, maxBytes = Infinity } = {}) {

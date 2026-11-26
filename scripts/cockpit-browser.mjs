@@ -207,10 +207,33 @@ try {
   await evidencePage.goto(base);
   await evidencePage.getByRole('region', { name: 'Air pollution' }).getByRole('button', { name: 'Track air quality' }).click();
   await evidencePage.getByText('Poor · Estimate', { exact: false }).waitFor();
-  await evidencePage.getByRole('button', { name: 'Wrong-side', exact: true }).click();
+  await evidencePage.getByRole('navigation', { name: 'RideLens' }).getByRole('button', { name: 'Camera', exact: true }).click();
   assert.equal(await evidencePage.getByRole('region', { name: 'Air pollution' }).count(), 0);
   await evidencePage.getByRole('button', { name: 'Start camera' }).click();
-  await evidencePage.getByRole('button', { name: 'Capture wrong-side vehicle' }).click();
+  // the camera opens full screen with its controls drawn over the picture
+  await evidencePage.locator('#hud').waitFor();
+  const hud = await evidencePage.evaluate(() => {
+    const cam = document.getElementById('camBox').getBoundingClientRect();
+    const inView = (id) => { const r = document.getElementById(id).getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth && r.width > 40; };
+    return { full: Math.round(cam.width) === innerWidth && Math.round(cam.height) === innerHeight, buttons: ['hudExit', 'hudAuto', 'hudVoice', 'hudDash', 'hudRide'].every(inView) };
+  });
+  assert.deepEqual(hud, { full: true, buttons: true }, 'full-screen camera with every control on screen');
+  if (screenshots) await evidencePage.screenshot({ path: join(screenshots, 'camera-fullscreen.png') });
+  // discreet: nothing on the full-screen camera says what is being looked for, and there is no tap-to-capture
+  const hudText = await evidencePage.locator('#hud').innerText();
+  assert.doesNotMatch(hudText, /wrong/i, `HUD text: ${hudText}`);
+  assert.equal(await evidencePage.locator('#hudCapture').count(), 0);
+  // voice commands switch screens (recogniser itself needs a real microphone; the command path is tested here)
+  await evidencePage.evaluate(() => window.__voice.runVoice(window.__voice.parseCommand('show history')));
+  assert.equal(await evidencePage.evaluate(() => document.querySelector('#view-history').classList.contains('active') && !document.body.classList.contains('immersive')), true);
+  await evidencePage.evaluate(() => window.__voice.runVoice(window.__voice.parseCommand('camera')));
+  assert.equal(await evidencePage.evaluate(() => document.body.classList.contains('immersive')), true, 'voice "camera" reopens the full-screen camera');
+  // a hands-free detection: focus/zoom, burst, and the zoomed-in vehicle shown on the HUD
+  await evidencePage.evaluate(() => window.__autoCapture({ type: 'Two-wheeler', vehicleClass: 'motorcycle', distanceM: 12, lateralM: -0.6, closingKmh: 60, oncomingKmh: 30, ownSpeedKmh: 30, score: 0.9, sightings: 4, spanS: 1, keep: 'left', box: [0.25, 0.35, 0.4, 0.4] }));
+  await evidencePage.locator('#hudZoom').waitFor();
+  assert.equal((await evidencePage.locator('#hudAlert').innerText()).trim(), '✓ Saved');
+  if (screenshots) await evidencePage.screenshot({ path: join(screenshots, 'camera-autozoom.png') });
+  await evidencePage.locator('#hudExit').click();
   // Poll explicitly: an async predicate returns a Promise, which waitForFunction treats as
   // truthy at once, so the old wait passed before the analysis had been saved.
   for (let i = 0; ; i++) {
@@ -222,9 +245,11 @@ try {
     assert.ok(i < 120, 'evidence analysis did not complete within 60 s');
     await evidencePage.waitForTimeout(500);
   }
+  assert.equal(await evidencePage.evaluate(() => document.body.classList.contains('immersive')), false);
   await evidencePage.locator('#wsList .item').first().click();
   await evidencePage.getByText('Air at capture · India AQI 233', { exact: false }).waitFor();
   assert.equal(await evidencePage.locator('#rpType').inputValue(), 'Two-wheeler');
+  await evidencePage.getByText('Direction', { exact: true }).waitFor();
   assert.equal(await evidencePage.locator('#rpPlate').inputValue(), 'KA01AB1234');
   const color = await evidencePage.evaluate(async () => {
     const { analyzeEvidence } = await import('/js/evidence-analysis.js');
@@ -252,14 +277,20 @@ try {
   const report = await evidencePage.evaluate(async () => {
     const { db } = await import('/js/db.js');
     const [saved] = await db.all('reports');
-    return { ...saved, photos: saved.photos.map(({ blob }) => blob.size) };
+    const crops = Object.fromEntries(Object.entries(saved.analysis?.crops || {}).map(([k, b]) => [k, b?.size || 0]));
+    return { ...saved, photos: saved.photos.map(({ blob }) => blob.size), crops };
   });
   assert.equal(report.plate, 'KA01AB1234');
   assert.equal(report.vehicleType, 'Two-wheeler');
   assert.equal(report.analysis.vehicle.rider, true);
   assert.equal(report.lat, 12.9716);
   assert.ok(report.gpsTime);
-  assert.ok(report.photos.length >= 4 && report.photos.every((size) => size > 0));
+  // compact storage: one key photo plus the vehicle / rider / head snapshots
+  assert.ok(report.compacted && report.photos.length === 1 && report.photos[0] > 0, `photos ${report.photos}`);
+  assert.ok(report.crops.vehicle > 0 && report.crops.rider > 0 && report.crops.head > 0, `crops ${JSON.stringify(report.crops)}`);
+  assert.equal(report.analysis.helmet.model, 'ok', 'helmet model ran');
+  assert.ok(['helmet', 'no helmet', 'unclear'].includes(report.analysis.helmet.verdict));
+  assert.equal(report.analysis.models.plate, 'ok', 'plate model ran');
   await evidencePage.getByRole('button', { name: 'Stop camera' }).click();
   await evidencePage.getByRole('button', { name: 'Live', exact: true }).click();
   await evidencePage.getByRole('button', { name: 'Stop tracking' }).click();

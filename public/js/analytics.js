@@ -47,7 +47,10 @@ export const DEFAULTS = {
   clutchMinMs: 120,
   clutchMaxMs: 4000,
   overheatC: 105,
-  crashG: 4.0,              // total linear acceleration (g) treated as a crash-level impact
+  crashG: 4.0,              // total linear acceleration (g) treated as a crash-level impact...
+  crashConfirmMs: 6000,     // ...but only if, within this time, the bike nearly stops or falls over:
+  crashStopKmh: 10,         // a handlebar-mounted phone sees 4-6 g spikes at speed from vibration alone
+  longConfirmKmh: 4,        // hard brake / acceleration must change GPS/OBD speed by at least this
   fallAngleDeg: 55,         // phone's measured 'down' tilted this far from the learned upright...
   fallMs: 1500,             // ...for this long = bike on its side
   mountLearnWeight: 10,     // evidence needed before trusting the learned forward axis
@@ -277,9 +280,21 @@ export function createAnalyzer(options = {}) {
   // bike is lying on its side.
   function detectCrash(t, lin) {
     const g = norm(lin) / G;
-    if (g >= cfg.crashG && t - (s.lastCrashT || 0) > 10000) {
+    const pc = s.pendingCrash;
+    if (pc) {
+      pc.peakG = Math.max(pc.peakG, g);
+      // confirmed when the bike (nearly) stops, or falls over (see below), soon after the hit
+      if (s.speedSrc !== 'none' && s.speed * 3.6 <= cfg.crashStopKmh && t - pc.t > 1000) {
+        s.pendingCrash = null;
+        emit('crash', pc.t, { severity: 'critical', peakG: +pc.peakG.toFixed(1), fromKmh: pc.fromKmh, confirmedBy: 'stopped' });
+      } else if (t - pc.t > cfg.crashConfirmMs) { s.pendingCrash = null; s.rejectedCrashes = (s.rejectedCrashes || 0) + 1; }
+    }
+    if (g >= cfg.crashG && !s.pendingCrash && t - (s.lastCrashT || 0) > 10000) {
       s.lastCrashT = t;
-      emit('crash', t, { severity: 'critical', peakG: +g.toFixed(1) });
+      const fromKmh = s.speedSrc !== 'none' ? Math.round(s.speed * 3.6) : null;
+      // already (nearly) stationary, e.g. hit while waiting at a signal: no stop to wait for
+      if (fromKmh != null && fromKmh <= cfg.crashStopKmh) emit('crash', t, { severity: 'critical', peakG: +g.toFixed(1), fromKmh, confirmedBy: 'stationary' });
+      else s.pendingCrash = { t, peakG: g, fromKmh };
     }
     if (!s.up || !s.accSmooth || t - s.startT < 5000) return;
     const cos = dot(unit(s.accSmooth), s.up);
@@ -288,6 +303,8 @@ export function createAnalyzer(options = {}) {
       s.tiltSince ??= t;
       if (!s.fallFired && t - s.tiltSince >= cfg.fallMs) {
         s.fallFired = true;
+        const pc = s.pendingCrash;
+        if (pc) { s.pendingCrash = null; emit('crash', pc.t, { severity: 'critical', peakG: +pc.peakG.toFixed(1), fromKmh: pc.fromKmh, confirmedBy: 'fall' }); }
         emit('fall', s.tiltSince, { severity: 'critical', tiltDeg: Math.round(angle) });
       }
     } else { s.tiltSince = null; s.fallFired = false; }
@@ -402,7 +419,31 @@ export function createAnalyzer(options = {}) {
     });
   }
 
+  // A candidate hard brake/acceleration is held until the speed source has caught up
+  // (GPS lags ~1 s), then kept only if the speed really changed: handlebar vibration
+  // alone can push the accelerometer past 0.35 g without the bike slowing at all.
+  function confirmLong(t) {
+    while (s.pendingLong.length && t >= s.pendingLong[0].due) {
+      const c = s.pendingLong.shift();
+      const change = c.kind === 'brake' ? c.v0 - c.vMin : c.vMax - c.v0; // m/s
+      const expected = 0.6 * Math.abs(c.peak) * (c.dur / 1000); // m/s if the peak were held at 60 %
+      if (s.speedSrc === 'none' || change * 3.6 >= Math.max(cfg.longConfirmKmh, 0.5 * expected * 3.6)) {
+        emit(c.kind, c.t0, c.kind === 'brake' ? {
+          severity: Math.abs(c.peak) >= cfg.emergencyBrake ? 'severe' : 'moderate',
+          peakG: +(Math.abs(c.peak) / G).toFixed(2), durationMs: c.dur,
+          fromKmh: +(c.v0 * 3.6).toFixed(1), toKmh: +(c.vMin * 3.6).toFixed(1),
+        } : {
+          severity: Math.abs(c.peak) / G > 0.5 ? 'severe' : 'moderate', peakG: +(Math.abs(c.peak) / G).toFixed(2), durationMs: c.dur,
+          fromKmh: +(c.v0 * 3.6).toFixed(1), toKmh: +(c.vMax * 3.6).toFixed(1),
+        });
+      } else s.rejectedLong = (s.rejectedLong || 0) + 1;
+    }
+    for (const c of s.pendingLong) { c.vMin = Math.min(c.vMin, s.speed); c.vMax = Math.max(c.vMax, s.speed); }
+  }
+
   function detectLong(t) {
+    s.pendingLong ||= [];
+    confirmLong(t);
     const a = s.long;
     const e = s.longEvent;
     if (!e) {
@@ -417,19 +458,10 @@ export function createAnalyzer(options = {}) {
     const dur = t - e.t0;
     s.longEvent = null;
     if (dur < cfg.eventMinMs) return;
-    const peakG = Math.abs(e.peak) / G;
-    if (e.kind === 'brake') {
-      emit('brake', e.t0, {
-        severity: Math.abs(e.peak) >= cfg.emergencyBrake ? 'severe' : 'moderate',
-        peakG: +peakG.toFixed(2), durationMs: dur,
-        fromKmh: +(e.v0 * 3.6).toFixed(1), toKmh: +(s.speed * 3.6).toFixed(1),
-      });
-    } else {
-      emit('accel', e.t0, {
-        severity: peakG > 0.5 ? 'severe' : 'moderate', peakG: +peakG.toFixed(2), durationMs: dur,
-        fromKmh: +(e.v0 * 3.6).toFixed(1), toKmh: +(s.speed * 3.6).toFixed(1),
-      });
-    }
+    // speed before the event: the oldest recent sample (GPS lags, so look back ~1.5 s)
+    const v0 = Math.max(e.v0, s.speedHist[0]?.v ?? e.v0);
+    const vb = e.kind === 'brake' ? v0 : Math.min(e.v0, s.speedHist[0]?.v ?? e.v0);
+    s.pendingLong.push({ kind: e.kind, t0: e.t0, peak: e.peak, dur, v0: vb, vMin: s.speed, vMax: s.speed, due: t + 2500 });
   }
 
   // ---------- GPS ----------
@@ -643,6 +675,9 @@ export function createAnalyzer(options = {}) {
       clutchPct: s.movingMs ? +((s.clutchMs / s.movingMs) * 100).toFixed(1) : null,
       gearRatios: [...s.gears].sort((a, b) => b.ratio - a.ratio).map((g) => +g.ratio.toFixed(1)),
       maxCoolant: s.maxCoolant,
+      // vibration the phone sees while moving: a loose or undamped mount reads > ~1 m/s² even
+      // on good roads, which hides real potholes among mount shake
+      mountShake: (() => { const v = s.track.filter((p) => p.v > 15).map((p) => p.rough).sort((a, b) => a - b); return v.length > 20 ? +v[Math.floor(v.length * 0.25)].toFixed(2) : null; })(),
       avgRoughness: roughVals.length ? +(roughVals.reduce((a, b) => a + b, 0) / roughVals.length).toFixed(2) : null,
       scores: scores(),
     };
