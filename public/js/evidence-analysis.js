@@ -1,4 +1,5 @@
 import { normalizePlate, ocrPlate } from './reports.js';
+import { detectPlates, classifyHelmet, helmetVerdict, headBox } from './ai-models.js';
 
 let model;
 function loadScript(src) {
@@ -25,19 +26,39 @@ export async function loadDetector() {
 }
 
 const labels = { motorcycle: 'Two-wheeler', car: 'Car', bus: 'Bus', truck: 'Truck / tempo', bicycle: 'Cycle' };
-export function findSubjects(predictions, width, height) {
-  const rank = ({ bbox: [x, y, w, h], score }) => score * Math.sqrt(w * h / (width * height))
-    / (1 + Math.abs((x + w / 2) / width - 0.5) + Math.abs((y + h / 2) / height - 0.5));
+// hint: the auto-detection that triggered the capture ({ vehicleClass, box: normalised [x,y,w,h] }),
+// so the photos are searched for THAT vehicle rather than whatever is biggest in view.
+export function findSubjects(predictions, width, height, hint = null) {
+  const near = (b) => {
+    if (!hint?.box) return 1;
+    const dx = (b[0] + b[2] / 2) / width - (hint.box[0] + hint.box[2] / 2), dy = (b[1] + b[3] / 2) / height - (hint.box[1] + hint.box[3] / 2);
+    return 1 / (1 + 3 * Math.hypot(dx, dy));
+  };
+  const rank = ({ bbox, score, class: cls }) => score * Math.sqrt(bbox[2] * bbox[3] / (width * height))
+    * (hint?.vehicleClass ? (cls === hint.vehicleClass ? 1.6 : 0.6) * near(bbox)
+      : 1 / (1 + Math.abs((bbox[0] + bbox[2] / 2) / width - 0.5) + Math.abs((bbox[1] + bbox[3] / 2) / height - 0.5)));
   const vehicle = predictions.filter((p) => labels[p.class]).sort((a, b) => rank(b) - rank(a))[0];
   if (!vehicle) return null;
   const [x, y, w, h] = vehicle.bbox;
-  const rider = ['motorcycle', 'bicycle'].includes(vehicle.class) && predictions.some((p) => {
+  const riders = ['motorcycle', 'bicycle'].includes(vehicle.class) ? predictions.filter((p) => {
     if (p.class !== 'person') return false;
     const [px, py, pw, ph] = p.bbox;
     return px + pw / 2 >= x && px + pw / 2 <= x + w && py < y + h && py + ph >= y && py + ph <= y + h * 1.25;
-  });
-  return { type: labels[vehicle.class], confidence: vehicle.score, rider: Boolean(rider), box: vehicle.bbox, rank: rank(vehicle) };
+  }).sort((a, b) => b.bbox[2] * b.bbox[3] - a.bbox[2] * a.bbox[3]) : [];
+  return { type: labels[vehicle.class], vehicleClass: vehicle.class, confidence: vehicle.score, rider: riders.length > 0, riders: riders.length,
+    riderBox: riders[0]?.bbox ?? null, box: vehicle.bbox, rank: rank(vehicle) };
 }
+
+// a JPEG of part of an image, at most maxSide pixels on its longer side
+async function cropJpeg(image, box, maxSide, quality = 0.85) {
+  const [x, y, w, h] = [Math.max(0, box[0]), Math.max(0, box[1]), Math.min(image.width - Math.max(0, box[0]), box[2]), Math.min(image.height - Math.max(0, box[1]), box[3])];
+  if (w < 4 || h < 4) return null;
+  const k = Math.min(maxSide / Math.max(w, h), 3); // small crops are enlarged (up to 3x) so they stay readable
+  const c = document.createElement('canvas'); c.width = Math.round(w * k); c.height = Math.round(h * k);
+  const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(image, x, y, w, h, 0, 0, c.width, c.height);
+  return new Promise((r) => c.toBlob(r, 'image/jpeg', quality));
+}
+const pad = ([x, y, w, h], f) => [x - w * f, y - h * f, w * (1 + 2 * f), h * (1 + 2 * f)];
 
 function imageRegion(image, box, width, height) {
   const canvas = document.createElement('canvas');
@@ -156,9 +177,16 @@ export async function readPlateCrop(blob, region, onProgress) {
   } finally { bitmap.close(); }
 }
 
-export async function analyzeEvidence(photos, onProgress) {
+// Things the camera cannot judge reliably from a moving motorcycle; listed in the report
+// so nobody assumes they were checked.
+export const NOT_ASSESSED = [
+  ['Seat belt', 'Not checked: through a windscreen at road distance, a phone camera cannot see a belt reliably, and no tested model exists for this view.'],
+  ['Rear-view mirrors', 'Not checked: no public model detects two-wheeler mirrors; check the snapshot yourself.'],
+];
+
+export async function analyzeEvidence(photos, onProgress, hint = null) {
   const frames = photos.map((photo, index) => ({ ...photo, index }))
-    .sort((a, b) => (b.sharpness ?? 0) - (a.sharpness ?? 0)).slice(0, 4);
+    .sort((a, b) => (b.sharpness ?? 0) - (a.sharpness ?? 0)).slice(0, 5);
   const regions = [];
   let unavailable = false;
   try {
@@ -166,34 +194,86 @@ export async function analyzeEvidence(photos, onProgress) {
     for (const photo of frames) {
       const image = await createImageBitmap(photo.blob);
       try {
-        const result = findSubjects(await detector.detect(image, 12, 0.45), image.width, image.height);
+        const result = findSubjects(await detector.detect(image, 15, 0.4), image.width, image.height, hint);
         if (result) regions.push({ ...result, frame: photo.index, color: bodyColour(image, result.box) });
       } finally { image.close(); }
     }
   } catch { unavailable = true; }
   regions.sort((a, b) => b.rank * (b.rider ? 1.3 : 1) - a.rank * (a.rider ? 1.3 : 1));
   const top = regions[0];
-  let plate = null;
-  try {
-    const targets = (regions.length ? regions : frames.map(({ index }) => ({ frame: index }))).slice(0, 3);
-    for (const target of targets) {
-      const image = await createImageBitmap(photos[target.frame].blob);
-      try {
-        const [x, y, w, h] = target.box || [0, 0, image.width, image.height];
-        const crops = target.box
-          ? [[x + w * 0.23, y + h * 0.54, w * 0.54, h * 0.39], [x + w * 0.08, y + h * 0.36, w * 0.84, h * 0.64]]
-          : [[x, y, w, h]];
-        const precise = target.box ? likelyPlateRegions(image, target.box) : [];
-        for (const crop of [...precise, ...crops]) {
-          const mode = precise.includes(crop) ? '7' : '11';
-          const candidate = plateCandidate(await recognizeRegion(image, crop, onProgress, mode));
-          if (candidate && (!plate || candidate.confidence > plate.confidence)) plate = { ...candidate, frame: target.frame };
-          if (plate?.confidence >= 85) break;
-        }
-      } finally { image.close(); }
-      if (plate?.confidence >= 85) break;
+
+  // 1. number plate: the plate detector finds it inside the vehicle, then OCR reads only that strip
+  let plate = null, plateCrop = null, plateModel = 'ok';
+  const targets = (regions.length ? regions : frames.map(({ index }) => ({ frame: index }))).slice(0, 4);
+  for (const target of targets) {
+    const image = await createImageBitmap(photos[target.frame].blob);
+    try {
+      let found = [];
+      try { found = await detectPlates(image, target.box ? pad(target.box, 0.08) : undefined); } catch { plateModel = 'unavailable'; }
+      for (const pl of found.slice(0, 2)) {
+        const crop = pad(pl.box, 0.06);
+        if (!plateCrop || pl.score > plateCrop.score) plateCrop = { score: pl.score, frame: target.frame, blob: await cropJpeg(image, crop, 480, 0.92) };
+        try {
+          for (const mode of ['7', '8']) {
+            const candidate = plateCandidate(await recognizeRegion(image, crop, onProgress, mode));
+            if (candidate && (!plate || candidate.confidence > plate.confidence)) plate = { ...candidate, frame: target.frame, detector: +pl.score.toFixed(2) };
+            if (candidate) break;
+          }
+        } catch { unavailable = true; }
+        if (plate?.confidence >= 85) break;
+      }
+      // fallback when the plate model is unavailable or found nothing: older brightness heuristics
+      if (!found.length && !plate) {
+        try {
+          const [x, y, w, h] = target.box || [0, 0, image.width, image.height];
+          const precise = target.box ? likelyPlateRegions(image, target.box) : [];
+          const broad = target.box ? [[x + w * 0.23, y + h * 0.54, w * 0.54, h * 0.39], [x + w * 0.08, y + h * 0.36, w * 0.84, h * 0.64]] : [[x, y, w, h]];
+          for (const crop of [...precise, ...broad]) {
+            const candidate = plateCandidate(await recognizeRegion(image, crop, onProgress, precise.includes(crop) ? '7' : '11'));
+            if (candidate && (!plate || candidate.confidence > plate.confidence)) plate = { ...candidate, frame: target.frame, detector: null };
+            if (plate?.confidence >= 85) break;
+          }
+        } catch { unavailable = true; }
+      }
+    } finally { image.close(); }
+    if (plate?.confidence >= 85) break;
+  }
+
+  // 2. rider and helmet (two-wheelers): head crop of the rider on the matched vehicle, every frame it is seen
+  const helmetScores = [];
+  let helmetModel = 'ok';
+  const twoWheeler = top && ['motorcycle', 'bicycle'].includes(top.vehicleClass);
+  if (twoWheeler) {
+    for (const r of regions.filter((x) => x.riderBox && x.vehicleClass === top.vehicleClass).slice(0, 4)) {
+      const image = await createImageBitmap(photos[r.frame].blob);
+      try { helmetScores.push(await classifyHelmet(image, headBox(r.riderBox))); } catch { helmetModel = 'unavailable'; } finally { image.close(); }
     }
-  } catch { unavailable = true; }
-  const vehicle = top && { type: top.type, confidence: top.confidence, color: top.color, rider: top.rider, frame: top.frame };
-  return { vehicle: vehicle ?? null, plate, status: unavailable ? 'partial' : 'complete' };
+  }
+
+  // 3. snapshots kept for the report: vehicle, rider (person + vehicle), plate
+  const crops = {};
+  if (top) {
+    const image = await createImageBitmap(photos[top.frame].blob);
+    try {
+      crops.vehicle = await cropJpeg(image, pad(top.box, 0.1), 720);
+      const withRider = regions.find((x) => x.frame === top.frame && x.riderBox) || (top.riderBox ? top : null);
+      if (withRider) {
+        const [vx, vy, vw, vh] = withRider.box, [px, py, pw, ph] = withRider.riderBox;
+        const x0 = Math.min(vx, px), y0 = Math.min(vy, py);
+        crops.rider = await cropJpeg(image, pad([x0, y0, Math.max(vx + vw, px + pw) - x0, Math.max(vy + vh, py + ph) - y0], 0.08), 720);
+        crops.head = await cropJpeg(image, headBox(withRider.riderBox), 320);
+      }
+    } finally { image.close(); }
+  }
+  if (plateCrop?.blob) crops.plate = plateCrop.blob;
+
+  const vehicle = top && { type: top.type, vehicleClass: top.vehicleClass, confidence: top.confidence, color: top.color, rider: top.rider, riders: top.riders, frame: top.frame };
+  return {
+    vehicle: vehicle ?? null, plate,
+    plateBox: plateCrop ? { score: +plateCrop.score.toFixed(2), frame: plateCrop.frame } : null,
+    helmet: twoWheeler ? { ...helmetVerdict(helmetScores), model: helmetModel } : null,
+    crops, models: { plate: plateModel, helmet: twoWheeler ? helmetModel : 'not needed' },
+    notAssessed: NOT_ASSESSED.map(([item, why]) => ({ item, why })),
+    status: unavailable || plateModel !== 'ok' ? 'partial' : 'complete',
+  };
 }

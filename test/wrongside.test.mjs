@@ -43,11 +43,42 @@ test('ignores parked vehicles in our lane', () => {
   assert.equal(run({ own: 30, other: 0, lateral: 0 }).length, 0);
 });
 
-test('works for a two-wheeler and with no GPS speed (stricter threshold)', () => {
-  const a = run({ cls: 'motorcycle', own: 0, other: 25, lateral: -0.5, ownKnown: false });
+test('works for a two-wheeler, also while we wait at a signal', () => {
+  const a = run({ cls: 'motorcycle', own: 0, other: 25, lateral: -0.5 });
   assert.equal(a.length, 1);
   assert.equal(a[0].type, 'Two-wheeler');
-  assert.equal(run({ cls: 'motorcycle', own: 0, other: 10, lateral: 0, ownKnown: false }).length, 0);
+  assert.equal(a[0].view, 'front');
+  assert.equal(run({ cls: 'motorcycle', own: 0, other: 8, lateral: 0 }).length, 0, 'walking pace is not flagged');
+});
+
+test('without GPS speed nothing is flagged: oncoming and slower traffic look alike', () => {
+  assert.equal(run({ own: 30, other: 30, lateral: 0, ownKnown: false }).length, 0);
+});
+
+test('a same-direction vehicle we overtake is not flagged even with ±20 % distance error', () => {
+  // scale error makes closing speed look 20 % higher than it is
+  const tr = createWrongSideTracker({ fovDeg: FOV * 0.85 });
+  const alerts = [];
+  for (let t = 0, d = 50; d > 4; t += 0.35, d = 50 - ((60 - 25) / 3.6) * t) alerts.push(...tr.update(t * 1000, [box('car', d, -0.5)], W, H, 60));
+  assert.equal(alerts.length, 0);
+});
+
+test('jittery detections (no steady approach) are not flagged', () => {
+  const tr = createWrongSideTracker({ fovDeg: FOV });
+  const alerts = [];
+  const ds = [22, 14, 25, 12, 20, 11, 19, 13];
+  ds.forEach((d, i) => alerts.push(...tr.update(i * 350, [box('car', d, 0)], W, H, 30)));
+  assert.equal(alerts.length, 0);
+});
+
+test('a box cut off by the picture edge is not used for distance', () => {
+  const tr = createWrongSideTracker({ fovDeg: FOV });
+  const alerts = [];
+  for (let t = 0, d = 40; d > 4; t += 0.35, d = 40 - (60 / 3.6) * t) {
+    const b = box('car', d, 0); b.bbox[0] = 0; // always touching the left edge
+    alerts.push(...tr.update(t * 1000, [b], W, H, 30));
+  }
+  assert.equal(alerts.length, 0);
 });
 
 test('mirrors lanes for keep-right countries', () => {
@@ -66,7 +97,7 @@ test('keeps tracking a fast-approaching vehicle at a low check rate (2/s)', () =
   const alerts = [];
   const closing = 58 / 3.6;
   for (let t = 0, d = 50; d > 3; t += 0.5, d = 50 - closing * t) {
-    alerts.push(...tr.update(t * 1000, [box('car', d, -0.3)], W, H, null));
+    alerts.push(...tr.update(t * 1000, [box('car', d, -0.3)], W, H, 20));
   }
   assert.equal(alerts.length, 1, 'one alert for one approaching car');
 });
