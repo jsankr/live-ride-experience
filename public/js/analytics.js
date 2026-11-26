@@ -30,6 +30,7 @@ export const DEFAULTS = {
   impactK: 4.0,             // a jolt must exceed this many times the background RMS...
   impactMinG: 0.5,          // ...and this absolute level (g)
   potholeDipG: 0.35,        // pothole: the wheel drops first, a dip at least this deep (g)...
+  potholeDipWindowMs: 200,  // ...within this long before the slam
   bumpDecelKmh: 4,          // speed breaker: compression first, after slowing by this much...
   bumpSlowKmh: 20,          // ...or when already this slow
   potholeMinSpeed: 3,       // m/s
@@ -355,8 +356,10 @@ export function createAnalyzer(options = {}) {
     };
     // pothole = the wheel drops BEFORE the big compression; rebound and the rear wheel's hit
     // come after the spike, so only the part before the peak counts as the drop
+    // ...and only IMMEDIATELY before it (a wheel crosses a hole in tens of ms): an earlier dip is
+    // fork dive from braking for a speed breaker, which made breakers look like potholes
     let minBefore = 0;
-    for (let i = 0; i < iMax; i++) minBefore = Math.min(minBefore, smp[i].v);
+    for (let i = 0; i < iMax; i++) if (smp[iMax].t - smp[i].t <= cfg.potholeDipWindowMs) minBefore = Math.min(minBefore, smp[i].v);
     const dipLevel = Math.max(cfg.potholeDipG * G, 2.5 * bg);
     const dip = -minBefore >= dipLevel;
     cfg.onClassify?.({ t: p.t, minBeforeG: minBefore / G, maxG: maxV / G, bgG: bg / G, dip });

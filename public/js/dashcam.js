@@ -45,7 +45,7 @@ export const overlapping = (clips, t, before = 30000, after = 30000) =>
 
 // ---------- recorder ----------
 export class Dashcam {
-  constructor({ getOverlay, onSegment, onError, segmentMs = 60000, height = 720, fps = 24, bitsPerSecond = 2500000 }) {
+  constructor({ getOverlay, onSegment, onError, segmentMs = 60000, height = 720, fps = 20, bitsPerSecond = 2500000 }) {
     Object.assign(this, { getOverlay, onSegment, onError, segmentMs, height, fps, bitsPerSecond });
     this.mime = pickMime((m) => window.MediaRecorder?.isTypeSupported(m));
     this.running = false;

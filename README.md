@@ -76,20 +76,17 @@ The Trip card shows:
   - Opening either app sends RideLens to the background, where browsers pause its sensors.
 
 ## Hands-free wrong-side detection
-Turn on the camera in **Wrong-side** with the phone facing the road. With **Hands-free** ticked (the default), RideLens watches by itself.
+Turn on the camera in **Wrong-side** with the phone facing the road. With **Hands-free** ticked, RideLens watches by itself.
 
-How a vehicle gets flagged:
-- **Detection**: about 2 checks per second, alternating the full frame with a 2× zoom on the centre of the road. A lightweight COCO-SSD detector runs in the browser.
-- **Distance**: estimated from the vehicle's apparent width and a typical real width for its class.
-- **Speed**: the vehicle's own speed toward you is its closing speed minus your GPS speed. That way traffic you're catching up to, and parked vehicles, don't count.
-- **Lane**: worked out from its sideways offset in metres. With keep-left traffic, which you set in Setup, a vehicle approaching at or left of your line is on the wrong side.
-- **Trigger**: when such a vehicle is within 30 m, RideLens saves the photo burst, including the 4 s before. It then reads vehicle type, colour, rider and number plate automatically, and the report is tagged **AUTO** with the measurements behind it.
-
-Limits:
-- **Estimates only.** Every number is an estimate. Review reports before sharing them.
-- **Only on screen.** The camera works only while RideLens is on screen.
-- **Detection range** depends on the phone's speed. In CI-like headless Chromium without a GPU, a car was first detected at about 15 m.
-- **No real-road testing.** The decision logic is tested on synthetic geometry, plus an end-to-end browser test with a real car photo approaching in the frame. It has not been validated on real roads.
+**Keep-left India (the default):** only vehicles **coming toward you on your left** count, i.e. between you and the kerb, or dead ahead (≤ 0.2 m right of your line). Oncoming traffic on your right is legitimate and ignored. Switch to keep-right in Setup if needed.
+- **What it looks at:** only your side of the picture (the left 62%, from the kerb to just past the centre). Everything else is simply recorded by the dashcam, with no live analysis.
+- **How it decides:** distance comes from the vehicle's apparent width. Its own speed toward you is its closing speed minus your GPS speed, so parked vehicles and traffic you're catching up to don't count.
+- **When it triggers:** it fires within 30 m. The burst capture includes the 4 s before, and vehicle type, colour and plate are read automatically. The report is tagged **AUTO**.
+- **Heat:**
+  - check rate: every 1.2 s when stopped, 0.5 s when moving, 0.3 s while a vehicle is near on your side;
+  - never faster than 2× the time a check takes, so a hot, throttled phone automatically does less;
+  - dashcam stamp drawn at 20 fps; pre-roll frame every 0.7 s.
+- **Limit:** catching fast vehicles needs several checks per second. On this project's CPU-only test machine (~1 check/s), a car closing at 29 km/h was captured and one at 43 km/h was missed. On a phone using its graphics chip it should be several times faster, but that's **unmeasured**.
 
 ## Potholes, speed breakers and rough stretches
 Road events are judged against the vibration of the road you are on *right now*. A jolt must be 4× the running background (and ≥ 0.5 g), so a rough road or a shaky handlebar mount doesn't turn every bump into an event.
@@ -101,7 +98,9 @@ Road events are judged against the vibration of the road you are on *right now*.
 
 On simulated rides: smooth roads count potholes and breakers within ±1. Rough roads with 300–460 random jolts per ride keep potholes within ±25%, never over-count breakers, and find rough stretches within ±40%. **These are simulations, not real roads.** Turn on *Keep raw sensor data* in Setup to re-analyse rides later, and to share real data for tuning.
 
-**Maps:** the ride report map filters All / Potholes / Breakers / Rough. *History → Road hazard map* merges potholes and breakers from all rides (within 15 m), marks spots hit on more than one ride, lists the worst with Google Maps links, and exports GeoJSON/CSV.
+**Maps:** the ride report map filters All / Potholes / Breakers / Rough. *History → Road hazard map* merges potholes and breakers from all rides (within 15 m), marks spots hit on more than one ride, lists the worst with Google Maps links, and exports GeoJSON/CSV. Rides recorded with the old detector (before 25 Nov 2026, 22:00 IST) are left off the map unless you tick *Include rides recorded with the old detector*.
+
+A pothole's dip must come within 0.2 s before the slam. An earlier dip is fork dive from braking for a speed breaker, which had made breakers count as potholes.
 
 ## Dashcam
 **Wrong-side → Start camera** with **Dashcam** on (the default) records the road continuously.

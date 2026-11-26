@@ -49,8 +49,8 @@ export class EvidenceCamera {
       const frame = await this.grab();
       if (!frame || this.stream !== stream) return;
       this.ring.push(frame);
-      while (this.ring.length > 8) this.ring.shift();
-    }, 500);
+      while (this.ring.length > 6) this.ring.shift(); // ~4 s pre-roll
+    }, 700); // a frame every 0.7 s: less JPEG work (heat) than every 0.5 s
   }
 
   grab(quality = 0.78) {

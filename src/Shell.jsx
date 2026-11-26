@@ -129,6 +129,8 @@ export function Shell() {
       <div className="section-head"><h2>Ride history</h2><button className="ghost" id="importBtn">Import JSON</button><input type="file" id="importFile" accept="application/json" hidden /></div>
       <article className="card hazard-card" id="hazardCard">
         <div className="card-head"><h3>Road hazard map · all rides</h3><span className="actions"><button className="ghost" id="hzGeo">GeoJSON</button><button className="ghost" id="hzCsv">CSV</button></span></div>
+        <label className="check"><input type="checkbox" id="hzOld" /> <span>Include rides recorded with the old detector (before 25 Nov, 22:00 IST)</span></label>
+        <p className="fine" id="hzOldNote"></p>
         <div id="hazardMap" className="map" style={{ minHeight: 320 }}></div>
         <p className="fine" id="hzSummary"></p>
         <ol className="hz-list" id="hzList"></ol>

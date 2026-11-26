@@ -222,7 +222,7 @@ async function stopRide() {
 
 function packRide(id, an) {
   return {
-    id, savedAt: Date.now(),
+    id, savedAt: Date.now(), detector: 2,
     ...(rawImu?.length ? { raw: { v: 1, t0: rawImu.t0, imu: rawImu } } : {}),
     summary: an.summary(), events: an.events, track: an.track, timeline: an.timeline,
     gears: an.gears,
@@ -627,7 +627,15 @@ function download(name, text, type) {
 
 // ---------------- history ----------------
 let hazardMap = null, hazardSpots = [];
-function renderHazards(rides) {
+// Rides analysed before the current road detector (published 2026-11-25 16:30 UTC) logged
+// rough-road vibration as hundreds of potholes/bumps; keep them off the map unless asked.
+const ROAD_DETECTOR_V2_SINCE = Date.UTC(2026, 10, 25, 16, 30);
+const currentDetector = (r) => (r.detector ?? 0) >= 2 || r.reanalysedAt || (r.summary?.startT ?? 0) >= ROAD_DETECTOR_V2_SINCE;
+function renderHazards(allRides) {
+  const includeOld = $('hzOld').checked;
+  const rides = includeOld ? allRides : allRides.filter(currentDetector);
+  const hidden = allRides.length - rides.length;
+  $('hzOldNote').textContent = hidden && !includeOld ? `${hidden} older ride${hidden > 1 ? 's' : ''} hidden (recorded with the old detector).` : '';
   hazardSpots = mergeHazards(rides);
   const pot = hazardSpots.filter((x) => x.type === 'pothole'), brk = hazardSpots.filter((x) => x.type === 'bump');
   $('hzSummary').textContent = rides.length ? `${pot.length} pothole spots (${pot.filter((x) => x.rides > 1).length} seen on more than one ride) and ${brk.length} speed breakers across ${rides.length} rides.` : '';
@@ -644,6 +652,7 @@ function renderHazards(rides) {
   }
   if (hazardSpots.length) hazardMap.fitBounds(L.latLngBounds(hazardSpots.map((x) => [x.lat, x.lon])), { padding: [24, 24], maxZoom: 16 });
 }
+$('hzOld').addEventListener('change', async () => renderHazards(await db.all('rides')));
 $('hzGeo').addEventListener('click', () => download('road-hazards.geojson', JSON.stringify(hazardsGeoJson(hazardSpots), null, 1), 'application/geo+json'));
 $('hzCsv').addEventListener('click', () => download('road-hazards.csv', hazardsCsv(hazardSpots), 'text/csv'));
 
@@ -819,7 +828,7 @@ function startAuto() {
     onStatus: (st) => {
       window.__autoWatchStatus = st; // for diagnostics/tests
       $('autoStatus').textContent = st.error ? st.error
-        : `Watching the road · ${st.fps.toFixed(1)} checks/s · ${st.vehicles} vehicle${st.vehicles === 1 ? '' : 's'} in view`;
+        : `Watching the ${settings.keepSide === 'right' ? 'right' : 'left'} side · ${st.fps.toFixed(1)} checks/s${st.active ? ' (vehicle near)' : ''} · ${st.vehicles} vehicle${st.vehicles === 1 ? '' : 's'} there`;
     },
   });
 }
