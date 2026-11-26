@@ -39,7 +39,9 @@ export function createWrongSideTracker(options = {}) {
     fovDeg: 60,            // horizontal field of view of the video stream
     keep: 'left',          // which side traffic keeps to ('left' for India/UK, 'right' elsewhere)
     triggerDistanceM: 30,  // decide only once the vehicle is this close
-    ownLaneEdgeM: 1.0,     // lateral offset (towards the oncoming side) where our lane ends
+    // Keep-left India: a wrong-side vehicle comes at us on OUR LEFT (between us and the kerb)
+    // or dead ahead. Oncoming traffic on our right is legitimate and ignored.
+    sideEdgeM: 0.2,        // max lateral offset toward the oncoming side (m) that still counts
     minOwnVelocityKmh: 8,  // the vehicle's own speed toward us must exceed this
     minScore: 0.45,
     ...options,
@@ -89,7 +91,7 @@ export function createWrongSideTracker(options = {}) {
       const near = tr.last.d <= cfg.triggerDistanceM;
       // lateral offset toward the side oncoming traffic should use
       const towardOncoming = cfg.keep === 'left' ? tr.last.lateral : -tr.last.lateral;
-      const inOurLane = towardOncoming < cfg.ownLaneEdgeM;
+      const inOurLane = towardOncoming <= cfg.sideEdgeM;
       const needed = cfg.minOwnVelocityKmh + (ownSpeedKmh == null ? 7 : 0); // stricter without GPS speed
       if (near && inOurLane && ownVelocityKmh >= needed) {
         tr.fired = true;
@@ -109,51 +111,74 @@ export function createWrongSideTracker(options = {}) {
 }
 
 // ---------- browser loop ----------
+// Region of the picture the detector looks at: the rider's own (left, for keep-left) side
+// of the road, from the kerb to just past the centre where distant vehicles appear.
+// Only this crop is analysed, which costs less than the whole frame and gives distant
+// vehicles on the left more pixels. Returns [x, y, w, h] in source pixels.
+export function watchRegion(keep, vw, vh) {
+  const w = vw * 0.62, x = keep === 'left' ? 0 : vw - w;
+  return [x, vh * 0.18, w, vh * 0.7];
+}
+
+// How long to wait before the next check (ms). Slow when stopped or when nothing is on
+// the watched side; fast only while a vehicle there is close or approaching. Never faster
+// than 2x the last inference time, so a hot, throttled phone backs off on its own.
+export function nextInterval({ ownSpeedKmh, active, lastInferMs = 0 }) {
+  // A wrong-side vehicle closing at 50 km/h covers the last 15 m (where it is recognisable) in
+  // about a second, so a moving rider needs a check every ~0.5 s to see it at least twice.
+  const base = ownSpeedKmh != null && ownSpeedKmh < 5 ? 1200 : active ? 300 : 500;
+  return Math.min(2000, Math.max(base, 2 * lastInferMs));
+}
+
 export function startAutoWatch({ video, overlay, loadDetector, getOwnSpeedKmh, keep = 'left', onAlert, onStatus }) {
-  let stopped = false, busy = false, frames = 0, lastStatus = 0, lastAlert = 0;
+  let stopped = false, frames = 0, lastStatus = 0, lastAlert = 0;
   const tracker = createWrongSideTracker({ keep });
   const canvas = document.createElement('canvas');
   let detector = null;
   loadDetector().then((d) => { detector = d; }).catch((e) => onStatus?.({ error: `Vehicle detector unavailable: ${e.message}` }));
   const started = performance.now();
 
+  let lastInferMs = 0, active = false;
   async function tick() {
     if (stopped) return;
-    setTimeout(tick, 350);
-    if (busy || !detector || !video.videoWidth || document.hidden) return;
-    busy = true;
+    const cycleStart = performance.now();
+    let wait = 500;
     try {
-      const scale = Math.min(1, 640 / Math.max(video.videoWidth, video.videoHeight));
-      canvas.width = Math.round(video.videoWidth * scale); canvas.height = Math.round(video.videoHeight * scale);
-      // Alternate the full frame with a 2x zoom on the centre of the road: distant vehicles
-      // in our lane are only ~30-40 px wide in the full frame, below what the lightweight
-      // detector reliably finds. Crop boxes are mapped back to full-frame coordinates.
-      const zoom = frames % 2 === 1;
+      if (!detector || !video.videoWidth || document.hidden) return;
       const vw = video.videoWidth, vh = video.videoHeight;
-      const src = zoom ? [vw * 0.25, vh * 0.25, vw * 0.5, vh * 0.5] : [0, 0, vw, vh];
-      canvas.getContext('2d').drawImage(video, src[0], src[1], src[2], src[3], 0, 0, canvas.width, canvas.height);
-      let preds = await detector.detect(canvas, 12, 0.4);
-      if (zoom) {
-        preds = preds.map((p) => ({ ...p, bbox: [canvas.width * 0.25 + p.bbox[0] / 2, canvas.height * 0.25 + p.bbox[1] / 2, p.bbox[2] / 2, p.bbox[3] / 2] }));
-      }
+      const [rx, ry, rw, rh] = watchRegion(keep, vw, vh);
+      const k = 576 / rw; // crop always fed at 576 px wide: low-res cameras get enlarged, which helps the detector find small, distant vehicles
+      canvas.width = Math.round(rw * k); canvas.height = Math.round(rh * k);
+      canvas.getContext('2d').drawImage(video, rx, ry, rw, rh, 0, 0, canvas.width, canvas.height);
+      const t0 = performance.now();
+      const raw = await detector.detect(canvas, 10, 0.4);
+      lastInferMs = performance.now() - t0;
+      // back to full-frame coordinates (at scale k) so distance and lateral offset stay correct
+      const fw = vw * k, fh = vh * k;
+      const preds = raw.map((p) => ({ ...p, bbox: [rx * k + p.bbox[0], ry * k + p.bbox[1], p.bbox[2], p.bbox[3]] }));
       frames++;
       // portrait streams see a narrower horizontal angle than landscape ones
-      tracker.config.fovDeg = canvas.width >= canvas.height ? 64 : 48;
-      const alerts = tracker.update(Date.now(), preds, canvas.width, canvas.height, getOwnSpeedKmh());
-      drawOverlay(overlay, canvas, tracker.tracks, alerts);
-      const now = performance.now();
+      tracker.config.fovDeg = vw >= vh ? 64 : 48;
+      const own = getOwnSpeedKmh();
+      const alerts = tracker.update(Date.now(), preds, fw, fh, own);
+      drawOverlay(overlay, { width: fw, height: fh }, tracker.tracks, alerts);
+      const nowS = Date.now() / 1000;
+      active = tracker.tracks.some((tr) => nowS - tr.last.t < 2 && tr.last.d < 45);
       for (const a of alerts) {
         if (Date.now() - lastAlert < 4000) continue; // one burst at a time
         lastAlert = Date.now();
-        onAlert?.({ ...a, frameW: canvas.width, frameH: canvas.height });
+        onAlert?.({ ...a, frameW: fw, frameH: fh });
       }
+      const now = performance.now();
       if (now - lastStatus > 1000) {
         lastStatus = now;
-        const seen = tracker.tracks.filter((tr) => Date.now() / 1000 - tr.last.t < 1);
-        onStatus?.({ fps: frames / ((now - started) / 1000), vehicles: seen.length,
+        const seen = tracker.tracks.filter((tr) => nowS - tr.last.t < 1);
+        onStatus?.({ fps: frames / ((now - started) / 1000), vehicles: seen.length, inferMs: Math.round(lastInferMs), active,
           tracks: seen.map((tr) => ({ cls: tr.cls, n: tr.obs.length, d: +tr.last.d.toFixed(1), lateral: +tr.last.lateral.toFixed(1), fired: tr.fired })) });
       }
-    } catch (e) { onStatus?.({ error: e.message }); } finally { busy = false; }
+      // the interval is start-to-start, so subtract the time this check already took
+      wait = Math.max(0, nextInterval({ ownSpeedKmh: own, active, lastInferMs }) - (performance.now() - cycleStart));
+    } catch (e) { onStatus?.({ error: e.message }); } finally { if (!stopped) setTimeout(tick, wait); }
   }
   tick();
   return () => { stopped = true; overlay?.getContext('2d').clearRect(0, 0, overlay.width, overlay.height); };

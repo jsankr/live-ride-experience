@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWrongSideTracker, REAL_WIDTH_M } from '../public/js/wrongside-watch.js';
+import { createWrongSideTracker, REAL_WIDTH_M, watchRegion, nextInterval } from '../public/js/wrongside-watch.js';
 
 // Synthetic camera geometry: build the box a vehicle of known width would make at a
 // given distance and lateral offset, then check the tracker's decision.
@@ -69,4 +69,25 @@ test('keeps tracking a fast-approaching vehicle at a low check rate (2/s)', () =
     alerts.push(...tr.update(t * 1000, [box('car', d, -0.3)], W, H, null));
   }
   assert.equal(alerts.length, 1, 'one alert for one approaching car');
+});
+
+test('keep-left India: only vehicles coming at us on our left (or dead ahead) count', () => {
+  assert.equal(run({ own: 30, other: 30, lateral: -1.5 }).length, 1, 'on our left, near the kerb');
+  assert.equal(run({ own: 30, other: 30, lateral: 0.1 }).length, 1, 'dead ahead');
+  assert.equal(run({ own: 30, other: 30, lateral: 0.8 }).length, 0, 'slightly to our right is not flagged');
+  assert.equal(run({ own: 30, other: 30, lateral: 3.5 }).length, 0, 'normal oncoming lane');
+});
+
+test('watches only the rider-side part of the picture', () => {
+  const [x, y, w, h] = watchRegion('left', 1920, 1080);
+  assert.equal(x, 0); assert.ok(w < 1920 * 0.65 && w > 1920 * 0.55); assert.ok(y > 0 && h < 1080);
+  assert.equal(watchRegion('right', 1920, 1080)[0], 1920 - w);
+});
+
+test('checks slow down when stopped or idle, speed up when a vehicle is near, back off when the phone is slow', () => {
+  assert.equal(nextInterval({ ownSpeedKmh: 0, active: false }), 1200);
+  assert.equal(nextInterval({ ownSpeedKmh: 30, active: false }), 500);
+  assert.equal(nextInterval({ ownSpeedKmh: 30, active: true }), 300);
+  assert.equal(nextInterval({ ownSpeedKmh: 30, active: true, lastInferMs: 400 }), 800);
+  assert.equal(nextInterval({ ownSpeedKmh: 30, active: true, lastInferMs: 2000 }), 2000);
 });
