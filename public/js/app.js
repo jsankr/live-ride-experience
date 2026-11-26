@@ -1021,6 +1021,9 @@ $('hudVoice').addEventListener('click', () => { settings.voiceOn = !voiceStop; $
 if (!voiceSupported()) { $('voiceMsg').textContent = 'This browser has no speech recognition.'; }
 // browsers only allow the microphone to start from a tap: the first tap anywhere starts listening
 else if (settings.voiceOn) document.addEventListener('pointerdown', () => { if (settings.voiceOn && !voiceStop) setVoice(true); }, { once: true, capture: true });
+// iPhone allows motion-sensor access only from a tap. Ask on the first tap, so a ride started
+// later by voice ("start ride") still gets motion data.
+document.addEventListener('pointerdown', () => { requestMotionPermission().catch(() => {}); }, { once: true, capture: true });
 window.__voice = { parseCommand, runVoice }; // for diagnostics/tests
 window.__autoCapture = (detection) => capture(detection); // diagnostics/tests: the path a hands-free detection takes
 $('camFull').addEventListener('click', async () => { if (!camOn) await setCamera(true); if (camOn) setImmersive(true); });
