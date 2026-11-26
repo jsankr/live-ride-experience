@@ -322,8 +322,11 @@ try {
   const voicePage = await voiceCtx.newPage();
   voicePage.on('pageerror', (error) => errors.push(error.message));
   await voicePage.goto(base);
+  // the app module loads after the page's load event: tap only once it is listening for taps
+  // (on CI the earlier tap landed before app.js had run, and voice never started)
+  await voicePage.waitForFunction(() => !!window.__voice && window.__RIDELENS_APP_BUILD);
   await voicePage.mouse.click(200, 300); // first tap: microphone (and motion access) may start
-  await voicePage.waitForFunction(() => window.__sr.starts > 0);
+  await voicePage.waitForFunction(() => window.__sr.starts > 0, null, { timeout: 10000 });
   const say = async (text, check) => { await voicePage.evaluate((t) => window.__say(t), text); await voicePage.waitForFunction(check, null, { timeout: 8000 }); };
   await say('RideLens start ride', () => document.getElementById('recLabel').textContent === 'Stop');
   await say('RideLens start camera', () => document.body.classList.contains('immersive') && document.getElementById('hudVoiceText').textContent === 'Listening');
