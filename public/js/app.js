@@ -4,6 +4,7 @@ import { analyzeEvidence, loadDetector, readPlateCrop } from './evidence-analysi
 import { startAutoWatch } from './wrongside-watch.js';
 import { createYouTubePlayer, parseYouTubeLink } from './ytplayer.js';
 import { summarizeRoad, summarizeWrongSide, roadReportHtml, wrongSideReportHtml, blobToDataUrl, stampedSnapshot } from './ride-reports.js';
+import { parseCommand, startVoice, voiceSupported } from './voice.js';
 import { Dashcam, fileName, retention, overlapping, stamp, clipsInRange, DAY_PARTS } from './dashcam.js';
 import { mergeHazards, hazardsGeoJson, hazardsCsv } from './hazards.js';
 import { createAnalyzer, comfortClass, comfortLegend } from './analytics.js';
@@ -19,7 +20,7 @@ const G = 9.80665;
 
 // ---------------- settings ----------------
 const settings = (() => {
-  const def = { camFull: true, compact: true, protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: '', keepSide: 'left', autoWatch: true, ytLink: '', dashcam: true, dcDays: '5', dcQuality: '2160', w3wKey: '', rawLog: false };
+  const def = { camFull: true, compact: true, discreet: true, voiceOn: false, voiceWake: false, protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: '', keepSide: 'left', autoWatch: true, ytLink: '', dashcam: true, dcDays: '5', dcQuality: '2160', w3wKey: '', rawLog: false };
   try {
     const v = { ...def, ...JSON.parse(localStorage.getItem('ridelens.settings') || '{}') };
     if (typeof v.invertYaw === 'boolean') v.invertYaw = v.invertYaw ? 'invert' : ''; // migrate old checkbox
@@ -405,6 +406,7 @@ bind('units', 'units');
 bind('rawLog', 'rawLog');
 bind('compact', 'compact');
 bind('camFullSet', 'camFull');
+bind('discreet', 'discreet');
 bind('keepSide', 'keepSide', 'change', () => { if (autoStop) { stopAuto(); startAuto(); } });
 bind('w3wKey', 'w3wKey', 'input');
 bind('theme', 'theme', 'change', applyTheme);
@@ -862,7 +864,10 @@ function updateHud() {
   $('hudRecText').textContent = rec ? `REC ${dashcam.canvas ? `${Math.min(dashcam.canvas.width, dashcam.canvas.height)}p` : ''}` : 'Dashcam off';
   const st = window.__autoWatchStatus;
   const side = settings.keepSide === 'right' ? 'right' : 'left';
-  $('hudWatch').textContent = !autoStop ? 'Auto-detect off' : st?.error ? 'Detector unavailable' : st ? `Watching ${side} · ${st.vehicles} vehicle${st.vehicles === 1 ? '' : 's'}` : 'Loading detector…';
+  const quiet = settings.discreet !== false;
+  $('hudWatch').textContent = !autoStop ? (quiet ? 'Auto off' : 'Auto-detect off') : st?.error ? (quiet ? 'Auto unavailable' : 'Detector unavailable')
+    : st ? (quiet ? 'Auto' : `Watching ${side} · ${st.vehicles} vehicle${st.vehicles === 1 ? '' : 's'}`) : 'Starting…';
+  $('hudVoice').setAttribute('aria-pressed', String(!!voiceStop));
   $('hudWatch').classList.toggle('warn', !!st?.error || (autoStop && st && sn.speedSrc === 'none'));
   const ev = analyzer.events;
   $('hudWs').textContent = recording ? ev.filter((e) => e.type === 'wrongside').length : '—';
@@ -874,14 +879,76 @@ function updateHud() {
   $('hudDash').setAttribute('aria-pressed', String(settings.dashcam !== false));
   $('hudRide').setAttribute('aria-pressed', String(recording)); $('hudRideText').textContent = recording ? 'Stop ride' : 'Start ride';
 }
+let evidenceBusy = false, zoomTimer = null;
+// "Auto zoom" view: the detected vehicle, cropped from the full-resolution frame, shown for 4 s
+async function showZoomInset(frames, box, z) {
+  if (!immersive || !frames?.length) return;
+  const f = frames.find((x) => x.t >= Date.now() - 1500) || frames[frames.length - 1];
+  try {
+    const img = await createImageBitmap(f.blob);
+    // box is in the un-zoomed picture; map it into the zoomed frame, then pad it
+    const m = (v) => 0.5 + (v - 0.5) * z;
+    const [bx, by, bw, bh] = box, x0 = m(bx), y0 = m(by), w = bw * z, h = bh * z;
+    const pad = 0.35, sx = Math.max(0, (x0 - w * pad) * img.width), sy = Math.max(0, (y0 - h * pad) * img.height);
+    const sw = Math.min(img.width - sx, w * (1 + 2 * pad) * img.width), sh = Math.min(img.height - sy, h * (1 + 2 * pad) * img.height);
+    const c = document.createElement('canvas'); c.width = 480; c.height = Math.max(60, Math.round(480 * sh / Math.max(1, sw)));
+    c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height); img.close();
+    $('hudZoomImg').src = c.toDataURL('image/jpeg', 0.8);
+    $('hudZoomTxt').textContent = settings.discreet !== false ? `Focus ${z > 1 ? `${z.toFixed(1)}× ` : ''}✓` : `Auto zoom ${z > 1 ? `${z.toFixed(1)}× optical + ` : ''}digital crop`;
+    $('hudZoom').hidden = false;
+    clearTimeout(zoomTimer); zoomTimer = setTimeout(() => { $('hudZoom').hidden = true; }, 4000);
+  } catch { /* frame unreadable: skip the preview */ }
+}
 function hudAlert(text) {
   if (!immersive) return;
   const el = $('hudAlert'); el.textContent = text; el.hidden = false;
+  el.classList.toggle('quiet', settings.discreet !== false);
   clearTimeout(hudAlertTimer); hudAlertTimer = setTimeout(() => { el.hidden = true; }, 4000);
 }
+// ---------------- voice commands ----------------
+let voiceStop = null, heardTimer = null;
+const VIEW_OF = { 'view:camera': 'wrongside', 'view:report': 'report', 'view:history': 'history', 'view:setup': 'setup', 'view:live': 'live' };
+async function runVoice(cmd) {
+  if (VIEW_OF[cmd]) {
+    if (cmd === 'view:camera') { show('wrongside'); if (camOn && settings.camFull !== false) setImmersive(true); }
+    else { if (immersive) setImmersive(false); show(VIEW_OF[cmd]); if (cmd === 'view:report' && currentRide) openRide(currentRide); }
+  } else if (cmd === 'full screen') { show('wrongside'); if (!camOn) await setCamera(true); if (camOn) setImmersive(true); }
+  else if (cmd === 'exit full screen') setImmersive(false);
+  else if (cmd === 'start ride') { if (!recording) $('recBtn').click(); }
+  else if (cmd === 'stop ride') { if (recording) $('recBtn').click(); }
+  else if (cmd === 'camera on') { if (!camOn) { await setCamera(true); if (camOn && settings.camFull !== false) setImmersive(true); } }
+  else if (cmd === 'camera off') { if (camOn) await setCamera(false); }
+  else if (cmd === 'dashcam on' || cmd === 'dashcam off') { const cb = $('dcOn'); if (cb.checked !== (cmd === 'dashcam on')) { cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); } }
+  const label = cmd.replace('view:', '');
+  if (immersive) { const h = $('hudHeard'); h.textContent = `🎙 ${label}`; h.hidden = false; clearTimeout(heardTimer); heardTimer = setTimeout(() => { h.hidden = true; }, 2000); updateHud(); }
+  else toast(`Voice: ${label}`, 1500);
+}
+function setVoice(on) {
+  voiceStop?.(); voiceStop = null;
+  if (on) {
+    voiceStop = startVoice({
+      requireWake: !!settings.voiceWake,
+      onCommand: (cmd) => runVoice(cmd).catch((e) => toast(e.message, 3000)),
+      onState: (st) => {
+        if (st.error) { $('voiceMsg').textContent = st.error; settings.voiceOn = false; $('voiceOn').checked = false; saveSettings(); voiceStop = null; }
+        else $('voiceMsg').textContent = st.listening ? 'Listening for commands…' : 'Voice commands on (restarting the listener)…';
+        if (immersive) updateHud();
+      },
+    });
+  } else $('voiceMsg').textContent = voiceSupported() ? '' : 'This browser has no speech recognition.';
+  if (immersive) updateHud();
+}
+$('voiceOn').checked = !!settings.voiceOn; $('voiceWake').checked = !!settings.voiceWake;
+// speech recognition must be started from a tap the first time (browser rule)
+$('voiceOn').addEventListener('change', (e) => { settings.voiceOn = e.target.checked; saveSettings(); setVoice(e.target.checked); });
+$('voiceWake').addEventListener('change', (e) => { settings.voiceWake = e.target.checked; saveSettings(); if (voiceStop) setVoice(true); });
+$('hudVoice').addEventListener('click', () => { settings.voiceOn = !voiceStop; $('voiceOn').checked = settings.voiceOn; saveSettings(); setVoice(settings.voiceOn); });
+if (!voiceSupported()) { $('voiceMsg').textContent = 'This browser has no speech recognition.'; }
+else if (settings.voiceOn) document.addEventListener('pointerdown', () => { if (settings.voiceOn && !voiceStop) setVoice(true); }, { once: true });
+window.__voice = { parseCommand, runVoice }; // for diagnostics/tests
+window.__autoCapture = (detection) => capture(detection); // diagnostics/tests: the path a hands-free detection takes
 $('camFull').addEventListener('click', async () => { if (!camOn) await setCamera(true); if (camOn) setImmersive(true); });
 $('hudExit').addEventListener('click', () => setImmersive(false));
-$('hudCapture').addEventListener('click', () => capture());
 $('hudAuto').addEventListener('click', () => { const cb = $('autoWatch'); cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); updateHud(); });
 $('hudDash').addEventListener('click', () => { const cb = $('dcOn'); cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); updateHud(); });
 $('hudRide').addEventListener('click', () => { $('recBtn').click(); setTimeout(updateHud, 300); });
@@ -891,7 +958,7 @@ document.addEventListener('fullscreenchange', () => { if (!document.fullscreenEl
 async function capture(detection = null) {
   const fab = $('fab');
   if (fab.classList.contains('busy')) return;
-  fab.classList.add('busy'); $('hudCapture').classList.add('busy');
+  fab.classList.add('busy');
   const capturedAt = Date.now();
   const snap = analyzer.snapshot();
   const associatedRide = recording ? rideId : null;
@@ -901,20 +968,27 @@ async function capture(detection = null) {
     if (!camOn) return;
     navigator.vibrate?.(60);
     // focus on the detected vehicle before the full-resolution frames are taken
-    let focused = false;
+    let focused = false, zoomed = null;
     if (detection?.box) {
       const [bx, by, bw, bh] = detection.box;
-      focused = await camera.focusAt(Math.min(1, Math.max(0, bx + bw / 2)), Math.min(1, Math.max(0, by + bh / 2)));
-      if (focused) await new Promise((r) => setTimeout(r, 250));
+      evidenceBusy = true; // the detector pauses while the picture is zoomed
+      zoomed = await camera.zoomFor(detection.box);
+      // after a centre zoom the vehicle sits further from the centre by the zoom factor
+      const z = zoomed?.zoom || 1, cx = 0.5 + (bx + bw / 2 - 0.5) * z, cy = 0.5 + (by + bh / 2 - 0.5) * z;
+      focused = await camera.focusAt(Math.min(1, Math.max(0, cx)), Math.min(1, Math.max(0, cy)));
+      if (focused || zoomed) await new Promise((r) => setTimeout(r, zoomed ? 400 : 250));
     }
-    const [frames, fix] = await Promise.all([camera.burst(), evidenceLocation.fixAt(capturedAt)]);
+    let frames, fix;
+    try { [frames, fix] = await Promise.all([camera.burst(), evidenceLocation.fixAt(capturedAt)]); }
+    finally { zoomed?.restore(); evidenceBusy = false; }
+    if (detection?.box) showZoomInset(frames, detection.box, zoomed?.zoom || 1);
     if (!frames.length) throw new Error('No frames captured');
     const airQuality = fix && air?.cell === airCell(fix) && Math.abs(air.time - capturedAt) <= 90 * 60000 ? air : null;
     const speed = associatedRide && snap.speedSrc !== 'none' ? snap.speedKmh : null;
     let rep = await saveReport({ frames, snapshot: { fix, speedKmh: speed }, rideId: associatedRide, capturedAt, airQuality });
     if (detection) {
       // hands-free trigger: keep the measurements that caused it, pre-fill the vehicle type
-      rep = await db.updateReport(rep.id, (r) => ({ ...r, auto: { ...detection, focused }, vehicleType: r.vehicleType || detection.type,
+      rep = await db.updateReport(rep.id, (r) => ({ ...r, auto: { ...detection, focused, opticalZoom: zoomed?.zoom ?? null }, vehicleType: r.vehicleType || detection.type,
         notes: r.notes || `Auto-detected: ${detection.type} coming toward you on your ${detection.keep === 'right' ? 'right' : 'left'} (wrong side), ~${detection.distanceM} m away, its own speed ~${detection.oncomingKmh} km/h toward you while you rode at ${detection.ownSpeedKmh ?? '?'} km/h.` })) || rep;
     }
     if (recording && rideId === associatedRide) {
@@ -922,9 +996,9 @@ async function capture(detection = null) {
       analyzer.events.push(ev); onEvent(ev);
     }
     recordIncident(detection ? 'wrongside' : 'manual', { reportId: rep.id, auto: detection || undefined, t: capturedAt }, frames);
-    toast(detection ? `Wrong-side ${detection.type.toLowerCase()} detected · ${frames.length} photos saved` : `Saved ${frames.length} photos · analysing vehicle and plate`);
+    if (!immersive) toast(detection ? `Wrong-side ${detection.type.toLowerCase()} detected · ${frames.length} photos saved` : `Saved ${frames.length} photos · analysing vehicle and plate`);
     if (detection) navigator.vibrate?.([80, 60, 80]);
-    hudAlert(detection ? `Wrong-side ${detection.type.toLowerCase()} on your ${detection.keep === 'right' ? 'right' : 'left'} · ${detection.distanceM} m · photos saved` : `Captured ${frames.length} photos`);
+    hudAlert(settings.discreet !== false ? '✓ Saved' : detection ? `Wrong-side ${detection.type.toLowerCase()} on your ${detection.keep === 'right' ? 'right' : 'left'} · ${detection.distanceM} m · photos saved` : `Captured ${frames.length} photos`);
     if (currentView === 'wrongside') renderReports();
     analysisQueue = analysisQueue.then(async () => {
       let timer;
@@ -938,7 +1012,7 @@ async function capture(detection = null) {
       if (currentView === 'wrongside') renderReports();
     }).catch(() => {});
 
-  } catch (e) { toast(e.message, 4000); } finally { fab.classList.remove('busy'); $('hudCapture').classList.remove('busy'); }
+  } catch (e) { toast(e.message, 4000); } finally { fab.classList.remove('busy'); }
 }
 $('fab').addEventListener('click', () => capture());
 $('captureBtn').addEventListener('click', () => capture());
@@ -961,6 +1035,7 @@ function startAuto() {
   $('autoStatus').textContent = 'Loading vehicle detector…';
   autoStop = startAutoWatch({
     video: $('camVideo'), overlay: $('camOverlay'), loadDetector, keep: settings.keepSide || 'left',
+    isPaused: () => evidenceBusy, isDiscreet: () => immersive && settings.discreet !== false,
     getOwnSpeedKmh: () => { const sn = analyzer.snapshot(); return sn.speedSrc !== 'none' && Date.now() - (sn.fix?.t ?? 0) < 5000 ? sn.speedKmh : null; },
     onAlert: (d) => {
       const detection = { type: d.type, vehicleClass: d.vehicleClass, distanceM: d.distanceM, lateralM: d.lateralM, closingKmh: d.closingKmh,

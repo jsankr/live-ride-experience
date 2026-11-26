@@ -152,7 +152,7 @@ export function nextInterval({ ownSpeedKmh, active, lastInferMs = 0 }) {
   return Math.min(2000, Math.max(base, 2 * lastInferMs));
 }
 
-export function startAutoWatch({ video, overlay, loadDetector, getOwnSpeedKmh, keep = 'left', onAlert, onStatus }) {
+export function startAutoWatch({ video, overlay, loadDetector, getOwnSpeedKmh, keep = 'left', onAlert, onStatus, isPaused = () => false, isDiscreet = () => false }) {
   let stopped = false, frames = 0, lastStatus = 0, lastAlert = 0;
   const tracker = createWrongSideTracker({ keep });
   const canvas = document.createElement('canvas');
@@ -166,7 +166,7 @@ export function startAutoWatch({ video, overlay, loadDetector, getOwnSpeedKmh, k
     const cycleStart = performance.now();
     let wait = 500;
     try {
-      if (!detector || !video.videoWidth || document.hidden) return;
+      if (!detector || !video.videoWidth || document.hidden || isPaused()) return; // paused while the camera is zoomed for evidence
       const vw = video.videoWidth, vh = video.videoHeight;
       const [rx, ry, rw, rh] = watchRegion(keep, vw, vh);
       const k = 576 / rw; // crop always fed at 576 px wide: low-res cameras get enlarged, which helps the detector find small, distant vehicles
@@ -183,7 +183,7 @@ export function startAutoWatch({ video, overlay, loadDetector, getOwnSpeedKmh, k
       tracker.config.fovDeg = vw >= vh ? 64 : 48;
       const own = getOwnSpeedKmh();
       const alerts = tracker.update(Date.now(), preds, fw, fh, own, [rx * k, ry * k, rw * k, rh * k]);
-      drawOverlay(overlay, { width: fw, height: fh }, tracker.tracks, alerts);
+      drawOverlay(overlay, { width: fw, height: fh }, tracker.tracks, alerts, isDiscreet());
       const nowS = Date.now() / 1000;
       active = tracker.tracks.some((tr) => nowS - tr.last.t < 2 && tr.last.d < 45);
       for (const a of alerts) {
@@ -206,7 +206,7 @@ export function startAutoWatch({ video, overlay, loadDetector, getOwnSpeedKmh, k
   return () => { stopped = true; overlay?.getContext('2d').clearRect(0, 0, overlay.width, overlay.height); };
 }
 
-function drawOverlay(overlay, frame, tracks, alerts) {
+function drawOverlay(overlay, frame, tracks, alerts, discreet = false) {
   if (!overlay) return;
   overlay.width = frame.width; overlay.height = frame.height;
   const ctx = overlay.getContext('2d');
@@ -216,6 +216,18 @@ function drawOverlay(overlay, frame, tracks, alerts) {
   for (const tr of tracks) {
     if (Date.now() / 1000 - tr.last.t > 0.8) continue;
     const [x, y, w, h] = tr.last.box;
+    if (discreet) {
+      // camera-style focus brackets only: nothing on screen says what is being looked for
+      const c = Math.min(w, h) * 0.22;
+      ctx.strokeStyle = hot.has(tr.id) || tr.fired ? 'rgba(255,214,10,.95)' : 'rgba(255,255,255,.6)';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      for (const [px, py, dx, dy] of [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]]) {
+        ctx.moveTo(px + dx * c, py); ctx.lineTo(px, py); ctx.lineTo(px, py + dy * c);
+      }
+      ctx.stroke();
+      continue;
+    }
     ctx.strokeStyle = hot.has(tr.id) || tr.fired ? '#e5484d' : 'rgba(255,255,255,.75)';
     ctx.strokeRect(x, y, w, h);
     const label = `${LABELS[tr.cls]} · ${Math.round(tr.last.d)} m`;

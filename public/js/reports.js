@@ -72,6 +72,23 @@ export class EvidenceCamera {
     } catch { return false; }
   }
 
+  // Optical zoom toward a detected vehicle where the camera allows it (some Android phones;
+  // iPhone Safari offers zoom only on recent iOS versions). Phone zoom always crops the CENTRE,
+  // so the level is chosen to keep the whole vehicle in view. Returns { zoom, restore } or null.
+  async zoomFor([bx, by, bw, bh]) {
+    const track = this.stream?.getVideoTracks()[0];
+    const caps = track?.getCapabilities?.() || {};
+    if (!caps.zoom?.max || caps.zoom.max <= 1) return null;
+    const before = track.getSettings?.().zoom ?? caps.zoom.min ?? 1;
+    const reach = Math.max(Math.abs(bx - 0.5), Math.abs(bx + bw - 0.5), Math.abs(by - 0.5), Math.abs(by + bh - 0.5));
+    const z = Math.min(caps.zoom.max, 3, 0.48 / Math.max(reach, 0.05));
+    if (z < 1.25) return null; // vehicle too close to the edge for centre zoom to help
+    try {
+      await track.applyConstraints({ advanced: [{ zoom: z }] });
+      return { zoom: +z.toFixed(2), restore: () => track.applyConstraints({ advanced: [{ zoom: before }] }).catch(() => {}) };
+    } catch { return null; }
+  }
+
   grab(quality = 0.78, maxSide = 1920) {
     const v = this.video;
     if (!this.stream || !v.videoWidth) return Promise.resolve(null);

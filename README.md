@@ -95,7 +95,20 @@ The Trip card shows:
 ## Hands-free wrong-side detection
 Turn on the camera in **Wrong-side** with the phone facing the road. It opens **full screen**: the live picture fills the phone, and everything is drawn over it on a transparent heads-up display.
 - **Status:** dashcam REC, watch status, GPS, clock, speed, and this ride's wrong-side / pothole / breaker counts.
-- **Buttons:** Exit, Auto-detect, a large Capture button, Dashcam, and Start/Stop ride.
+- **Buttons:** Exit, Auto-detect, Voice, Dashcam, and Start/Stop ride. There is no tap-to-capture while riding: capture is fully automatic. *Capture now (when parked)* on the Camera card remains for use off the bike.
+- **Discreet (Setup, on by default):** vehicles get camera-style focus brackets with no labels, counters say "captures" and alerts say "✓ Saved". People nearby can't tell what is being recorded. The tab is called **Camera**.
+- **Auto zoom and focus on each detection:**
+  1. **Optical zoom** toward the vehicle (up to 3×), where the phone exposes zoom to web pages. Phones zoom only the centre, so the level keeps the whole vehicle in view. Detection pauses for that second.
+  2. **Focus** moved onto the vehicle (Chrome on Android).
+  3. A **full-resolution burst**; zoom and focus then return to normal.
+  4. A 4-second **zoom preview** of the vehicle on the HUD.
+
+  iPhone browsers have no focus control and may have no zoom control. There, the digital crop from the full-resolution frames is the zoom.
+- **Voice commands (Setup → Voice commands):**
+  - Screens: "camera", "live", "report", "history", "setup".
+  - Controls: "start ride", "stop ride", "full screen", "exit full screen", "camera on/off", "dashcam on/off".
+  - Optional wake word: "RideLens report".
+  - The listener restarts itself. It uses the browser's speech recognition: Chrome on Android, or Safari with Dictation enabled. Wind noise at speed makes it unreliable without a helmet headset microphone.
 
 With **Hands-free** ticked, RideLens watches by itself.
 
