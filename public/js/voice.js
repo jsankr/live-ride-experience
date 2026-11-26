@@ -34,26 +34,30 @@ export function parseCommand(transcript, { requireWake = false } = {}) {
 export const voiceSupported = () => !!(window.SpeechRecognition || window.webkitSpeechRecognition);
 
 // Starts listening; returns stop(). onCommand(cmd, transcript); onState({listening, error})
-export function startVoice({ onCommand, onState, requireWake = false, lang = 'en-IN' }) {
+export function startVoice({ onCommand, onState, onHeard, requireWake = false, lang = 'en-IN' }) {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { onState?.({ listening: false, error: 'Voice commands are not available in this browser' }); return () => {}; }
-  let stopped = false, rec = null, last = { cmd: null, t: 0 }, fails = 0;
+  let stopped = false, rec = null, last = { cmd: null, t: 0 }, fails = 0, listening = false;
   const begin = () => {
     if (stopped || document.hidden) { rec = null; return; }
     rec = new SR();
     rec.lang = lang; rec.continuous = true; rec.interimResults = false; rec.maxAlternatives = 3;
-    rec.onstart = () => { fails = 0; onState?.({ listening: true }); };
+    rec.onstart = () => { fails = 0; listening = true; onState?.({ listening: true }); };
     rec.onresult = (e) => {
       for (let i = e.resultIndex; i < e.results.length; i++) {
         if (!e.results[i].isFinal) continue;
+        let matched = false;
         for (const alt of e.results[i]) {
           const cmd = parseCommand(alt.transcript, { requireWake });
           if (!cmd) continue;
           if (cmd === last.cmd && Date.now() - last.t < 2500) break; // same phrase reported twice
           last = { cmd, t: Date.now() };
+          matched = true;
           onCommand(cmd, alt.transcript);
           break;
         }
+        // tell the rider what was heard even when it wasn't a command, so a misheard word is visible
+        if (!matched) onHeard?.(e.results[i][0]?.transcript || '');
       }
     };
     rec.onerror = (e) => {
@@ -61,6 +65,7 @@ export function startVoice({ onCommand, onState, requireWake = false, lang = 'en
       else if (e.error !== 'no-speech' && e.error !== 'aborted') fails++;
     };
     rec.onend = () => {
+      listening = false;
       onState?.({ listening: false });
       if (!stopped) setTimeout(begin, Math.min(10000, 300 * 2 ** fails)); // keep listening; back off on repeated errors
     };
@@ -69,5 +74,8 @@ export function startVoice({ onCommand, onState, requireWake = false, lang = 'en
   const onVis = () => { if (!document.hidden && !stopped && !rec) begin(); };
   document.addEventListener('visibilitychange', onVis);
   begin();
-  return () => { stopped = true; document.removeEventListener('visibilitychange', onVis); try { rec?.abort(); } catch {} onState?.({ listening: false }); };
+  // iPhone Safari may refuse to restart without a tap: any tap restarts a stopped listener
+  const onTap = () => { if (!stopped && !listening) { try { rec?.abort(); } catch {} begin(); } };
+  document.addEventListener('pointerdown', onTap);
+  return () => { stopped = true; document.removeEventListener('pointerdown', onTap); document.removeEventListener('visibilitychange', onVis); try { rec?.abort(); } catch {} onState?.({ listening: false }); };
 }
