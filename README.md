@@ -42,6 +42,16 @@ Ride reports include a road-comfort map with clustered events, a heuristic score
 - When a ride ends, plain dashcam video of that ride is deleted. Locked incident clips (crash, fall, emergency braking, wrong-side, manual capture) are kept.
 - Raw sensor logging stays off unless you turn it on.
 
+**Removing false events:** in a ride report's *Event log*, tap **Remove false events**. Tick events that weren't real (a manhole, an expansion joint, a false crash alert), or choose a type and a time window and tap *Select matching*. **Remove** asks once. The ride's counts, the hazard map and the road report are then recalculated, and the report notes how many events you removed.
+
+**Deleting wrong-side reports:** *Camera → Reports → Select to delete*. Tick reports, or pick a day, a time and *which reports*:
+- automatic with no plate read;
+- automatic with no vehicle found in the photos;
+- not reviewed yet, dismissed, or captured by hand;
+- a vehicle type.
+
+Each option shows how many reports match. Deleted reports also come off their ride's wrong-side count.
+
 **Re-analyse** on a saved ride redoes potholes, breakers, rough stretches, hard braking/acceleration, crash and fall with the current rules (it needs the raw sensor log).
 
 ## Run it on your phone (no laptop)
@@ -168,6 +178,7 @@ A pothole's dip must come within 0.2 s before the slam. An earlier dip is fork d
   - tick whole days or single clips while scrolling.
 
   Locked incident clips are left out unless you tick *Also select locked incident clips*. Delete asks once, on the page.
+- **Delete by lock reason:** *Which clips* chooses between plain video, all clips, or only clips locked for one reason (e.g. *Locked: Crash-level impact*), with a count for each. That clears footage locked by false alarms without touching real incidents.
 - **Limit:** like every camera feature, recording stops whenever RideLens isn't on screen.
 
 ## Saved and recent destinations
