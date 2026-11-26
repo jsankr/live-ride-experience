@@ -17,9 +17,10 @@ if (window.__RIDELENS_SHELL_BUILD !== BUILD) {
     throw new Error('RideLens updated: reloading');
   }
 }
+import { rememberPlace, savePlace, unsavePlace, forgetPlace, rideEnds, suggestPlaces, ago } from './places.js';
 import { Dashcam, fileName, retention, overlapping, stamp, clipsInRange, DAY_PARTS } from './dashcam.js';
 import { mergeHazards, hazardsGeoJson, hazardsCsv } from './hazards.js';
-import { createAnalyzer, comfortClass, comfortLegend } from './analytics.js';
+import { createAnalyzer, comfortClass, comfortLegend, haversine } from './analytics.js';
 import { Elm327, bleTransport, wsTransport } from './obd.js';
 import { requestMotionPermission, startMotion, startGps, keepAwake } from './sensors.js';
 import { StripChart, FrictionCircle, lineChart, barChart, histogram } from './charts.js';
@@ -238,6 +239,7 @@ async function stopRide() {
     if (clips.length) note = ` · freed ${(clips.reduce((a, c) => a + c.size, 0) / 1e6).toFixed(0)} MB of plain video, incident clips kept`;
   }
   toast(`Ride saved · reports ready${note}`, 5000);
+  refreshPlaces();
   openRide(ride);
 }
 
@@ -923,6 +925,16 @@ function hudAlert(text) {
 let voiceStop = null, heardTimer = null, voiceListening = false;
 const VIEW_OF = { 'view:camera': 'wrongside', 'view:report': 'report', 'view:history': 'history', 'view:setup': 'setup', 'view:live': 'live' };
 async function runVoice(cmd) {
+  if (cmd?.startsWith('place:')) {
+    const want = cmd.slice(6);
+    await refreshPlaces();
+    const words = want.split(' ');
+    const hit = placeSuggestions.find((p) => (p.name || '').toLowerCase() === want)
+      || placeSuggestions.find((p) => p.name && words.every((w) => p.name.toLowerCase().includes(w)));
+    if (hit) { if (immersive) setImmersive(false); show('live'); goPlace(hit); }
+    else toast(`No saved place called "${want}". Save it with ☆ in Set destination.`, 3500);
+    return;
+  }
   if (VIEW_OF[cmd]) {
     if (cmd === 'view:camera') { show('wrongside'); if (camOn && settings.camFull !== false) setImmersive(true); }
     else { if (immersive) setImmersive(false); show(VIEW_OF[cmd]); if (cmd === 'view:report' && currentRide) openRide(currentRide); }
@@ -1348,6 +1360,69 @@ function targetFromInput(v) {
   return d.getTime();
 }
 
+// ---------------- saved & recent destinations ----------------
+const PLACES_KEY = 'ridelens.places';
+function loadPlaces() { try { return JSON.parse(localStorage.getItem(PLACES_KEY) || '[]'); } catch { return []; } }
+function storePlaces(list) { try { localStorage.setItem(PLACES_KEY, JSON.stringify(list)); } catch {} }
+const placeName = (p) => p.name || (p.fromRide ? `Where a ride ended · ${new Date(p.lastUsed).toLocaleDateString([], { day: 'numeric', month: 'short' })}` : `${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}`);
+let placeSuggestions = [], placeHere = null;
+// where you are, for distances, even before a ride is running (one quick, cached fix)
+function locateForPlaces() {
+  if (placeHere && Date.now() - placeHere.t < 120000) return;
+  navigator.geolocation?.getCurrentPosition((pos) => { placeHere = { lat: pos.coords.latitude, lon: pos.coords.longitude, t: Date.now() }; refreshPlaces(); }, () => {}, { maximumAge: 120000, timeout: 8000 });
+}
+async function refreshPlaces() {
+  const fix = analyzer.snapshot().fix || trip?.state.lastFix || placeHere || null;
+  let ends = [];
+  try { ends = rideEnds(await db.all('rides')); } catch {}
+  placeSuggestions = suggestPlaces(loadPlaces(), { here: fix, ends });
+  // dialog list
+  $('tripPlacesWrap').hidden = !placeSuggestions.length;
+  $('tripPlaces').innerHTML = placeSuggestions.map((p, i) => `<li>
+    <button type="button" class="place" data-pick="${i}"><b>${p.kind === 'saved' ? '★ ' : ''}${esc(placeName(p))}</b>
+      <span class="muted">${[p.distanceKm != null ? `${fmtDist(p.distanceKm)} away` : '', p.uses ? `${p.uses} trip${p.uses > 1 ? 's' : ''}` : p.kind === 'ride-end' ? 'from ride history' : '', p.lastUsed ? ago(p.lastUsed) : '', p.lastTarget ? `usually by ${p.lastTarget}` : ''].filter(Boolean).join(' · ')}</span></button>
+    <span class="place-actions"><button type="button" class="ghost" data-go="${i}">Go</button><button type="button" class="ghost" data-star="${i}" aria-label="${p.kind === 'saved' ? 'Unsave' : 'Save with a name'}">${p.kind === 'saved' ? '★' : '☆'}</button>${p.kind !== 'saved' && p.kind !== 'ride-end' ? `<button type="button" class="ghost" data-forget="${i}" aria-label="Forget">✕</button>` : ''}</span>
+  </li>`).join('');
+  // one-tap chips on the Trip card (Live screen)
+  const short = (p) => (p.fromRide ? `Ride end · ${new Date(p.lastUsed).toLocaleDateString([], { day: 'numeric', month: 'short' })}` : placeName(p).length > 24 ? `${placeName(p).slice(0, 23)}…` : placeName(p));
+  $('tripQuickPlaces').innerHTML = placeSuggestions.slice(0, 3).map((p, i) => `<button type="button" class="ghost chip-go" data-go="${i}" title="Start a trip to ${esc(placeName(p))}">${p.kind === 'saved' ? '★ ' : ''}${esc(short(p))}</button>`).join('');
+}
+function nextTargetFrom(hhmm) { return hhmm ? targetFromInput(hhmm) : null; }
+function goPlace(p) {
+  const dest = { lat: p.lat, lon: p.lon, name: placeName(p) };
+  if ($('tripDialog').open) $('tripDialog').close();
+  const targetT = nextTargetFrom(p.lastTarget);
+  rememberTrip(dest, targetT);
+  startTrip(dest, targetT);
+  toast(`Trip to ${dest.name}${p.lastTarget ? ` · target ${p.lastTarget}` : ''}`, 2500);
+}
+function rememberTrip(dest, targetT) { storePlaces(rememberPlace(loadPlaces(), dest, { targetT })); }
+async function placeAction(e) {
+  const el = e.target.closest('[data-pick],[data-go],[data-star],[data-forget]'); if (!el) return;
+  const p = placeSuggestions[+(el.dataset.pick ?? el.dataset.go ?? el.dataset.star ?? el.dataset.forget)]; if (!p) return;
+  if (el.dataset.go != null) return goPlace(p);
+  if (el.dataset.pick != null) {
+    tripPick = { lat: p.lat, lon: p.lon, name: placeName(p) };
+    if (p.lastTarget && !$('tripTime').value) $('tripTime').value = p.lastTarget;
+    $('tripPlaces').querySelectorAll('.place').forEach((b) => b.classList.toggle('sel', b === el));
+    return showPick();
+  }
+  let list = loadPlaces();
+  if (el.dataset.forget != null) list = forgetPlace(list, p.id);
+  else if (p.kind === 'saved') list = unsavePlace(list, p.id);
+  else {
+    const name = window.prompt('Name this place (e.g. Home, Office)', p.name || '');
+    if (name === null) return;
+    if (p.kind === 'ride-end') list = rememberPlace(list, { lat: p.lat, lon: p.lon, name }, { now: p.lastUsed });
+    const id = list.find((x) => haversine(x.lat, x.lon, p.lat, p.lon) <= 120)?.id;
+    list = savePlace(list, id, name);
+  }
+  storePlaces(list); refreshPlaces();
+}
+$('tripPlaces').addEventListener('click', placeAction);
+$('tripQuickPlaces').addEventListener('click', placeAction);
+refreshPlaces();
+
 function openTripDialog() {
   tripPick = trip ? { ...trip.state.dest } : null;
   $('tripQuery').value = '';
@@ -1356,6 +1431,7 @@ function openTripDialog() {
   showPick();
   $('tripDialog').showModal();
   setupTripMap(); showPick();
+  refreshPlaces(); locateForPlaces();
 }
 let tripMap = null, tripMapPin = null;
 function setupTripMap() {
@@ -1439,6 +1515,7 @@ function endTrip(silent) {
   tripLine?.remove(); tripPin?.remove(); tripLine = tripPin = null;
   $('tripEmpty').hidden = false; $('tripLive').hidden = true;
   renderTripQuick(null);
+  refreshPlaces();
   if (!silent) toast('Trip ended');
 }
 
@@ -1513,6 +1590,7 @@ $('tripStart').addEventListener('click', () => {
   if (!tripPick) return;
   const targetT = targetFromInput($('tripTime').value);
   $('tripDialog').close();
+  rememberTrip(tripPick, targetT);
   if (trip && trip.state.dest.lat === tripPick.lat && trip.state.dest.lon === tripPick.lon) { trip.state.targetT = targetT; renderTrip(); return; }
   startTrip(tripPick, targetT);
 });

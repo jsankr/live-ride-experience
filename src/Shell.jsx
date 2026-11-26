@@ -22,6 +22,7 @@ export function Shell() {
         <div className="trip-empty" id="tripEmpty">
           <div><h3>Trip</h3><p className="fine" style={{ margin: 0 }}>Set a destination and target arrival time to get a live ETA.</p></div>
           <button id="tripSet">Set destination</button>
+          <div className="quick-places" id="tripQuickPlaces" aria-label="Go to a saved or recent destination"></div>
         </div>
         <div className="trip-live" id="tripLive" hidden>
           <div className="trip-main">
@@ -270,7 +271,7 @@ export function Shell() {
           <label>Traffic drives on the <select id="keepSide"><option value="left">left (India, UK, Australia…)</option><option value="right">right (USA, Europe…)</option></select></label>
           <label className="check"><input type="checkbox" id="compact" defaultChecked /> <span><b>Compact storage (recommended)</b>: after each ride keep only the reports, wrong-side snapshots and locked incident clips. Plain dashcam video of the ride and extra burst photos are deleted.</span></label>
           <label className="check"><input type="checkbox" id="discreet" defaultChecked /> <span><b>Discreet camera screen</b>: on the full-screen camera, show only camera-style focus brackets and neutral words ("captures", "saved"), so people nearby can't tell what is being recorded.</span></label>
-          <label className="check"><input type="checkbox" id="voiceOn" /> <span><b>Voice commands</b>: say "camera", "live", "report", "history", "setup", "start ride", "stop ride", "full screen", "exit full screen", "dashcam on/off". On iPhone, Dictation must be on (Settings → General → Keyboard). Wind noise at speed makes recognition unreliable: a helmet headset microphone helps.</span></label>
+          <label className="check"><input type="checkbox" id="voiceOn" /> <span><b>Voice commands</b>: say "camera", "live", "report", "history", "setup", "start ride", "stop ride", "full screen", "exit full screen", "dashcam on/off", or "go to office" for a saved destination. On iPhone, Dictation must be on (Settings → General → Keyboard). Wind noise at speed makes recognition unreliable: a helmet headset microphone helps.</span></label>
           <label className="check"><input type="checkbox" id="voiceWake" /> <span>Only react when I start with "RideLens…" (e.g. "RideLens report"), so talking to a pillion doesn't switch screens</span></label>
           <p className="fine" id="voiceMsg"></p>
           <label className="check"><input type="checkbox" id="camFullSet" defaultChecked /> <span>Open the camera full screen when it starts</span></label>
@@ -319,6 +320,10 @@ export function Shell() {
         <div className="row" style={{ margin: 0 }}><input id="tripQuery" placeholder="e.g. Nandi Hills" autoComplete="off" style={{ flex: 1 }} /><button type="button" className="ghost" id="tripSearch">Search</button></div>
       </label>
       <ul className="results" id="tripResults"></ul>
+      <div id="tripPlacesWrap" hidden>
+        <p className="fine" style={{ margin: '4px 0' }}><b>Saved and recent</b> · tap to choose, <b>Go</b> to start at once, ☆ to save with a name</p>
+        <ul className="places" id="tripPlaces"></ul>
+      </div>
       <p className="fine" id="tripPicked">No destination chosen.</p>
       <p className="fine" style={{ margin: '4px 0' }}>Or <b>tap the map</b> to drop a pin exactly where you are going:</p>
       <div id="tripMap" className="trip-map"></div>

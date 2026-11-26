@@ -24,3 +24,9 @@ test('voice: with the wake word on, only "RideLens …" phrases count', () => {
   assert.equal(parseCommand('RideLens start camera'), 'camera on', 'wake word is fine when not required');
   assert.equal(parseCommand('Ride Lens open camera'), 'full screen');
 });
+
+test('voice: "go to office" asks for a trip to a saved place by name', () => {
+  assert.equal(parseCommand('go to office'), 'place:office');
+  assert.equal(parseCommand('RideLens take me to MG Road', { requireWake: true }), 'place:mg road');
+  assert.equal(parseCommand('navigate to my home'), 'place:home');
+});
