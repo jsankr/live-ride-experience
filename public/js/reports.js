@@ -5,15 +5,64 @@ import { db, uid } from './db.js';
 
 // Indian registration formats: standard (KA 01 AB 1234), older/no-series (DL 3C 1234 → DL3C1234),
 // and Bharat series (22 BH 1234 AA). Validation is advisory, never blocking.
+// State/UT codes in use (MoRTH): a real plate starts with one of these.
+export const STATE_CODES = new Set('AN AP AR AS BR CG CH DD DL DN GA GJ HP HR JH JK KA KL LA LD MH ML MN MP MZ NL OD OR PB PY RJ SK TN TR TS UK UP WB'.split(' '));
 const PLATE_RES = [
-  /^[A-Z]{2}\d{1,2}[A-Z]{0,3}\d{4}$/,
-  /^\d{2}BH\d{4}[A-Z]{1,2}$/,
+  /^([A-Z]{2})(\d{2})[A-Z]{0,3}\d{4}$/,  // district is two digits (KA 01 …)
+  /^(DL)(\d)[A-Z]{1,3}\d{4}$/,          // Delhi's older one-digit districts (DL 3C …)
+  /^\d{2}BH\d{4}[A-Z]{1,2}$/,           // Bharat series
 ];
 export function normalizePlate(s) {
   const p = String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
     .replace(/^([A-Z]{2})O(\d)/, (_, st, d) => `${st}0${d}`); // common OCR slip: O for 0 after state code
-  return { plate: p, valid: PLATE_RES.some((re) => re.test(p)) };
+  const valid = PLATE_RES.some((re) => { const m = p.match(re); return m && (!m[1] || STATE_CODES.has(m[1])); });
+  return { plate: p, valid };
 }
+// Indian plates: 2 state letters, 1-2 district digits, 0-3 series letters, 4 digits (or BH).
+// Fix the usual OCR mix-ups by position: a letter where a digit must be, and the reverse.
+const TO_DIGIT = { O: '0', D: '0', Q: '0', I: '1', L: '1', T: '1', Z: '2', S: '5', B: '8', G: '6' };
+const TO_LETTER = { 0: 'O', 1: 'I', 2: 'Z', 5: 'S', 8: 'B', 6: 'G' };
+export function fixPlateChars(p) {
+  const m = p.match(/^([A-Z0-9]{2})([A-Z0-9]{2})([A-Z0-9]{0,3})([A-Z0-9]{4})$/); // state, district, series, number
+  if (!m) return p;
+  const asL = (x) => x.replace(/[0-9]/g, (c) => TO_LETTER[c] || c), asD = (x) => x.replace(/[A-Z]/g, (c) => TO_DIGIT[c] || c);
+  return asL(m[1]) + asD(m[2]) + asL(m[3]) + asD(m[4]);
+}
+// Best registration in OCR text. Bolts, dots and the IND hologram split a plate into pieces
+// with junk between them, so pieces are combined in order (skipping junk) until a valid
+// registration appears; fewer skipped pieces win.
+export function plateFromText(text) {
+  const tokens = String(text || '').toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean).slice(0, 12);
+  let best = null;
+  const n = tokens.length;
+  const consider = (idx) => {
+    const raw = idx.map((i) => tokens[i]).join('');
+    if (raw.length < 8 || raw.length > 11) return;
+    const fixed = fixPlateChars(raw);
+    const changes = [...raw].filter((ch, i) => fixed[i] !== ch).length;
+    for (const cand of changes <= 2 ? [raw, fixed] : [raw]) {
+      const r = normalizePlate(cand);
+      if (!r.valid) continue;
+      const skipped = idx[idx.length - 1] - idx[0] + 1 - idx.length;
+      // single characters are usually bolts, dots or hologram bits read as letters
+      const singles = idx.filter((i) => tokens[i].length === 1).length;
+      const score = skipped + singles * 2 + (cand === raw ? 0 : changes);
+      if (!best || score < best.score) best = { plate: r.plate, score };
+    }
+  };
+  for (let a = 0; a < n; a++) {
+    consider([a]);
+    for (let b = a + 1; b < n; b++) {
+      consider([a, b]);
+      for (let c = b + 1; c < n; c++) {
+        consider([a, b, c]);
+        for (let d = c + 1; d < n; d++) consider([a, b, c, d]);
+      }
+    }
+  }
+  return best?.plate ?? null;
+}
+
 export function findPlates(text) {
   const cands = String(text || '').toUpperCase().replace(/[^A-Z0-9\n ]/g, ' ').split(/\n/)
     .flatMap((line) => {

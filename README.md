@@ -135,6 +135,14 @@ With **Hands-free** ticked, RideLens watches by itself.
 - **Evidence analysis (once per detection, on the saved photos only, so no extra heat while riding):**
   - **Focus and zoom:** the camera focus is moved onto the vehicle where the browser allows it (Chrome on Android). iPhone browsers give web pages no focus control, so the camera's own autofocus is used there. Frames after the trigger are kept at full camera resolution, and the vehicle, rider and plate are cropped from them (digital zoom).
   - **Number plate:** found by a YOLOv9-t plate detector ([open-image-models](https://github.com/ankandrew/open-image-models), MIT), then read by OCR on just that strip and checked against Indian formats.
+  - **Plate reading, tested on a real photo (TN 11 AH 1895):**
+    - the plate detector runs on the whole photo (on a tight crop it missed the plate);
+    - OCR runs five preprocessing variants per frame, and the reads vote: the correct plate came out 9 times over 3 frames, while each wrong read appeared once;
+    - pieces split by bolts and the "•" separators are recombined, and O/0, I/1, B/8, S/5, Z/2 are corrected by position;
+    - plates need a real state code and a two-digit district (Delhi excepted);
+    - a registration read the same way twice fills the field by itself, while a single weak read is only a suggestion.
+  - **Colour:** taken from the middle of the vehicle, with the plate left out. A painted colour wins once it covers a fifth of the samples, e.g. "Maroon and black".
+  - **Reanalyse all N frames** in a report runs all of this on every saved photo, shows progress, and keeps anything you already typed.
   - **Helmet (two-wheelers):** the EfficientNet-B0 `helmet_v5` classifier ([vivekvar/helmet-v5](https://huggingface.co/vivekvar/helmet-v5), Apache-2.0, trained on Indian traffic-camera crops; 81 % validation accuracy) on the rider's head, averaged over the frames. It's shown as *likely helmet / likely no helmet / unclear* with its probability.
   - **Not assessed:** seat belts (not visible through a windscreen at road distance, and no tested model exists for this view) and mirrors (no public model). The report says so instead of guessing.
   - **How it runs:** the models are in `public/models/` (24 MB). They are downloaded once and cached on the phone, and run with ONNX Runtime Web.

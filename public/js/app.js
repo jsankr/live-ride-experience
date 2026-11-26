@@ -854,10 +854,11 @@ function saveAnalysis(id, analysis) {
     const plate = analysis.plate;
     return {
       ...current, analysis,
-      vehicleType: current.vehicleType || (vehicle?.confidence >= 0.65 ? vehicle.type : ''),
-      color: current.color || (vehicle?.confidence >= 0.65 ? vehicle.color || '' : ''),
-      plate: current.plate || (plate?.confidence >= 75 ? plate.value : ''),
-      plateValid: current.plate ? current.plateValid : plate?.confidence >= 75,
+      vehicleType: current.vehicleType || (vehicle?.confidence >= 0.5 ? vehicle.type : ''),
+      color: current.color || (vehicle?.confidence >= 0.5 ? vehicle.color || '' : ''),
+      // a valid registration read in 2+ frames, or found by the plate model and read clearly enough
+      plate: current.plate || (plate?.accepted ?? plate?.confidence >= 75 ? plate.value : ''),
+      plateValid: current.plate ? current.plateValid : !!(plate?.accepted ?? plate?.confidence >= 75),
       synced: false,
     };
   });
@@ -1262,7 +1263,7 @@ function findingsHtml(r) {
   if (au) rows.push(['Direction', `Coming toward you on your ${au.keep === 'right' ? 'right' : 'left'} (front view): closed in at ${au.closingKmh} km/h while you rode at ${au.ownSpeedKmh ?? '?'} km/h, so it was moving ~${au.oncomingKmh} km/h toward you. Seen ${au.sightings}× over ${au.spanS ?? '?'} s.`]);
   if (au) rows.push(['Camera focus', au.focused ? 'Moved to the vehicle before the photos' : 'Not adjustable in this browser (camera autofocus used)']);
   if (a.vehicle) rows.push(['Vehicle', `${a.vehicle.color ? `${a.vehicle.color} ` : ''}${a.vehicle.type} (${Math.round(a.vehicle.confidence * 100)} %)${a.vehicle.riders ? ` · ${a.vehicle.riders} rider${a.vehicle.riders > 1 ? 's' : ''} seen` : ''}`]);
-  if (a.plate) rows.push(['Plate read', `${a.plate.value} (OCR ${Math.round(a.plate.confidence)} %${a.plate.detector ? `, plate found ${Math.round(a.plate.detector * 100)} %` : ''})`]);
+  if (a.plate) rows.push(['Plate read', `${a.plate.value} (OCR ${Math.round(a.plate.confidence)} %${a.plate.votes ? `, same result ${a.plate.votes}× across ${a.plate.framesRead} frame${a.plate.framesRead > 1 ? 's' : ''}` : ''}${a.plate.detector ? `, plate found ${Math.round(a.plate.detector * 100)} %` : ''})${a.plate.accepted ? '' : ' · low confidence: check it'}`]);
   else if (a.plateBox) rows.push(['Plate read', 'Plate found but not readable: check the plate snapshot']);
   if (a.helmet) rows.push(['Helmet', a.helmet.verdict === 'not seen' ? (a.helmet.model === 'unavailable' ? 'Helmet model unavailable (offline?)' : 'Rider not visible clearly enough') : `${a.helmet.verdict === 'no helmet' ? 'Likely NO helmet' : a.helmet.verdict === 'helmet' ? 'Likely wearing a helmet' : 'Unclear'} (P(no helmet) ${a.helmet.p}, ${a.helmet.frames} frame${a.helmet.frames > 1 ? 's' : ''})`]);
   for (const n of a.notAssessed || []) rows.push([n.item, n.why]);
@@ -1294,7 +1295,7 @@ function openReport(r) {
     ${vehicle ? `<div class="row"><button class="ghost" data-a="vehicle">Use ${esc(vehicle.type)}</button>${vehicle.color ? `<button class="ghost" data-a="color">Use ${esc(vehicle.color)}</button>` : ''}<button class="ghost" data-a="vehicle-frame">Vehicle frame ${vehicle.frame + 1}${vehicle.rider ? ' · possible rider' : ''}</button></div>` : ''}
     ${plate ? `<div class="row"><button class="ghost" data-a="plate">Use ${esc(plate.value)}</button><button class="ghost" data-a="plate-frame">Plate frame ${plate.frame + 1}</button></div>` : ''}
     <div class="row">
-      <button class="ghost" data-a="analyse">Reanalyse photos</button>
+      <button class="ghost" data-a="analyse">Reanalyse all ${r.photos.length} frames</button>
       <button class="ghost" data-a="crop" aria-pressed="false">Select plate area</button>
     </div>
     <label for="rpPlate">Registration number</label>
@@ -1396,10 +1397,21 @@ function openReport(r) {
       const update = (m) => { if (m.status) progress.textContent = m.status; };
       progress.textContent = 'Analysing photos on this device…';
       try {
-        const analysis = a === 'analyse' ? await analyzeEvidence(r.photos, update)
+        const analysis = a === 'analyse' ? await analyzeEvidence(r.photos, update, r.auto || null, { allFrames: true })
           : selectedRegion ? { plate: await readPlateCrop(r.photos[frame].blob, selectedRegion, update) }
             : await analyzeEvidence([r.photos[frame]], update);
         if (!progress.isConnected || !dlg.open) return;
+        if (a === 'analyse') {
+          // keep what you typed; fill only empty fields; store the new snapshots and findings
+          await collect();
+          const updated = await saveAnalysis(r.id, analysis);
+          const p = analysis.plate, v = analysis.vehicle;
+          const msg = [v ? `${v.color ? `${v.color} ` : ''}${v.type}` : 'No vehicle found', p ? `plate ${p.value} (read the same ${p.votes}× in ${p.framesRead} frame${p.framesRead > 1 ? 's' : ''}${p.accepted ? '' : ', low confidence'})` : 'no readable plate'].join(' · ');
+          openReport(updated || await db.get('reports', r.id));
+          const m = document.getElementById('rpPlateMsg'); if (m) m.textContent = `All frames analysed: ${msg}. Review and tap Save.`;
+          renderReports();
+          return;
+        }
         const suggested = { plate: analysis.plate?.value, vehicleType: analysis.vehicle?.type, color: analysis.vehicle?.color };
         const applied = [];
         for (const [key, field] of Object.entries(fields)) {
