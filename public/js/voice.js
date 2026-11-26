@@ -17,7 +17,7 @@ const COMMANDS = [
   ['view:report', /\b(reports?|summary|analysis)\b/],
   ['view:history', /\b(history|rides|past rides|hazards?)\b/],
   ['view:setup', /\b(setup|set up|settings)\b/],
-  ['view:live', /\b(live|dashboard|cockpit|home|speed)\b/],
+  ['view:live', /\b(live|dashboard|cockpit|speed)\b/], // not "home": that is usually a saved place
 ];
 
 // Optional wake word: with requireWake, only phrases containing "ride lens"/"ridelens" count,
@@ -27,6 +27,12 @@ export function parseCommand(transcript, { requireWake = false } = {}) {
   if (!t) return null;
   const wake = /\b(ride ?lens|ride lands|right lens)\b/;
   if (requireWake) { if (!wake.test(t)) return null; t = t.replace(wake, ' ').trim(); }
+  // "go to office", "take me to MG Road": a trip to a saved or recent destination by name
+  const dest = t.match(/\b(?:go|take me|navigate|ride|trip|head|drive) to (?:the |my )?([a-z0-9][a-z0-9 ]*)$/);
+  if (dest) {
+    const screen = COMMANDS.find(([, re]) => re.test(dest[1]));
+    return screen ? screen[0] : `place:${dest[1].trim()}`; // "go to history" is a screen, "go to office" a place
+  }
   for (const [cmd, re] of COMMANDS) if (re.test(t)) return cmd;
   return null;
 }

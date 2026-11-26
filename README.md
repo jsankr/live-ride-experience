@@ -170,6 +170,18 @@ A pothole's dip must come within 0.2 s before the slam. An earlier dip is fork d
   Locked incident clips are left out unless you tick *Also select locked incident clips*. Delete asks once, on the page.
 - **Limit:** like every camera feature, recording stops whenever RideLens isn't on screen.
 
+## Saved and recent destinations
+No typing for regular rides:
+- **Remembered:** every trip destination is remembered. Picks within 120 m of each other merge into one place, which keeps its trip count and the arrival time you usually set.
+- **Trip card:** **Set destination** shows the top three places as one-tap chips that start the trip straight away, with your usual target time.
+- **Destination dialog:**
+  - the full list: ★ saved places first, then recent trips, then places where your saved rides ended;
+  - each with distance from you, how often and when you last went;
+  - **tap** to choose, **Go** to start at once, **☆** to save with a name (Home, Office…), **✕** to forget a recent one.
+- **Limits:** places you are already at (within 300 m) aren't suggested. Recent places are capped at 15; saved places are kept until you unstar them.
+- **Voice:** "go to office" or "RideLens take me to home" starts a trip to the saved place with that name.
+- **Storage:** stored only on this phone.
+
 ## Precise destinations
 Besides place search, the Trip dialog accepts:
 - **GPS coordinates**, decimal or degrees-minutes-seconds;
