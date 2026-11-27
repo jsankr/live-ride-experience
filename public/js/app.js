@@ -22,6 +22,7 @@ import { inTimeRange, REPORT_KINDS, selectReports, selectClips, selectEvents, re
 import { Dashcam, fileName, retention, overlapping, stamp, DAY_PARTS } from './dashcam.js';
 import { mergeHazards, hazardsGeoJson, hazardsCsv } from './hazards.js';
 import { createNavHud } from './nav-hud.js';
+import { cleanTomTomKey, looksLikeTomTomKey, tomtomFlow } from './nav.js';
 import { createAnalyzer, comfortClass, comfortLegend, haversine } from './analytics.js';
 import { Elm327, bleTransport, wsTransport } from './obd.js';
 import { requestMotionPermission, startMotion, startGps, keepAwake } from './sensors.js';
@@ -427,7 +428,35 @@ bind('keepSide', 'keepSide', 'change', () => { if (autoStop) { stopAuto(); start
 bind('w3wKey', 'w3wKey', 'input');
 bind('navHud', 'navHud', 'change', () => { if (immersive) { navHud.stop(); navHud.start(); } });
 bind('navVoice', 'navVoice');
-bind('tomtomKey', 'tomtomKey', 'input');
+bind('tomtomKey', 'tomtomKey', 'input', () => {
+  const clean = cleanTomTomKey($('tomtomKey').value);
+  if (clean !== settings.tomtomKey) { settings.tomtomKey = clean; saveSettings(); }
+  $('tomtomStatus').textContent = !clean ? '' : looksLikeTomTomKey(clean) ? 'Saved. Tap Test key to check it.' : 'That doesn\u2019t look like a TomTom key (32 letters and digits).';
+});
+// Test the key against a real road: where you are, or Anna Salai, Chennai
+$('tomtomTest').addEventListener('click', async () => {
+  const st = $('tomtomStatus'), key = settings.tomtomKey;
+  if (!key) { st.textContent = 'Paste your key first.'; return; }
+  st.textContent = 'Checking\u2026';
+  const here = analyzer.snapshot().fix;
+  const p = here?.lat ? { lat: here.lat, lon: here.lon } : { lat: 13.0569, lon: 80.2520 };
+  try {
+    const f = await tomtomFlow(p, key);
+    st.textContent = f.currentKmh != null ? `Key works. Traffic ${here?.lat ? 'near you' : 'on Anna Salai'}: ${f.currentKmh} km/h (free-flow ${f.freeKmh}).` : 'Key works.';
+  } catch (e) {
+    st.textContent = /rejected/.test(e.message) ? 'TomTom rejected this key. Copy it again from API & SDK Keys on my.tomtom.com.' : `Couldn\u2019t reach TomTom (${e.message}). Check your connection.`;
+  }
+});
+// A link ending in #tomtom=KEY (sent from a computer) fills the key in on this phone
+{
+  const m = location.hash.match(/[#&]tomtom=([^&]+)/);
+  if (m) {
+    const k = cleanTomTomKey(decodeURIComponent(m[1]));
+    history.replaceState(null, '', location.pathname + location.search); // keep the key out of history and bookmarks
+    if (looksLikeTomTomKey(k)) { settings.tomtomKey = k; saveSettings(); $('tomtomKey').value = k; toast('TomTom key saved: live traffic is on'); }
+    else toast('That link\u2019s TomTom key doesn\u2019t look right');
+  }
+}
 bind('theme', 'theme', 'change', applyTheme);
 bind('invertYaw', 'invertYaw', 'change', () => toast('Applies from the next ride'));
 $('testServer').addEventListener('click', async () => {

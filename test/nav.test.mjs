@@ -124,3 +124,14 @@ test('an OpenStreetMap breaker where RideLens already detected one is not double
   assert.equal(m.length, 2); assert.equal(m[0].source, 'rides');
   assert.ok(dist(m[0], osm[0]) < 20);
 });
+
+import { cleanTomTomKey, looksLikeTomTomKey } from '../public/js/nav.js';
+test('a pasted TomTom key is cleaned up however it was copied', () => {
+  const k = 'AbCdEfGhIjKlMnOpQrStUvWxYz012345';
+  for (const pasted of [k, ` ${k}\n`, `"${k}"`, `key=${k}`, `Key: ${k}`, `https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json?point=13,80&key=${k}`, `https://x/#tomtom=1&key=${k}`]) {
+    assert.equal(cleanTomTomKey(pasted), k, pasted);
+  }
+  assert.ok(looksLikeTomTomKey(k));
+  assert.ok(!looksLikeTomTomKey('my first api key'));
+  assert.ok(!looksLikeTomTomKey(k.slice(0, 20)));
+});

@@ -200,6 +200,16 @@ export function probesAhead(route, travelled, aheadM = [400, 1200, 2500]) {
   const left = route.cum[route.cum.length - 1] - travelled;
   return aheadM.filter((a) => a < left).map((a) => ({ ahead: a, ...pointAt(route.coords, route.cum, travelled + a) }));
 }
+// A pasted key may come with spaces, quotes, a "key=" prefix or inside a whole request URL.
+// TomTom keys are 32 letters and digits.
+export function cleanTomTomKey(text = '') {
+  const t = String(text).trim();
+  const fromUrl = t.match(/[?&#]key=([A-Za-z0-9]+)/);
+  const v = (fromUrl ? fromUrl[1] : t).replace(/^["'`\s]+|["'`\s]+$/g, '').replace(/^key\s*[:=]\s*/i, '');
+  return v;
+}
+export const looksLikeTomTomKey = (k) => /^[A-Za-z0-9]{32}$/.test(k);
+
 export async function tomtomFlow(p, key, fetchImpl = fetch) {
   const url = `https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/10/json?point=${p.lat.toFixed(6)},${p.lon.toFixed(6)}&unit=KMPH&key=${encodeURIComponent(key)}`;
   const res = await fetchImpl(url);
