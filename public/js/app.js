@@ -1091,7 +1091,12 @@ async function capture(detection = null) {
       if (currentView === 'wrongside') renderReports();
     }).catch(() => {});
 
-  } catch (e) { toast(e.message, 4000); } finally { fab.classList.remove('busy'); }
+  } catch (e) { toast(e.message, 4000); } finally {
+    fab.classList.remove('busy');
+    // a second vehicle detected while this one was being saved: its frames are still in the
+    // camera's 4 s ring buffer, so save it now instead of dropping it
+    if (pendingAuto.length) { const next = pendingAuto.shift(); setTimeout(() => capture(next), 0); }
+  }
 }
 $('fab').addEventListener('click', () => capture());
 $('captureBtn').addEventListener('click', () => capture());
@@ -1109,6 +1114,7 @@ document.addEventListener('keydown', (e) => {
 
 // ---------------- hands-free wrong-side detection ----------------
 let autoStop = null;
+const pendingAuto = []; // auto-detections waiting while a capture is being saved
 function startAuto() {
   if (autoStop || !camOn) return;
   $('autoStatus').textContent = 'Loading vehicle detector…';
@@ -1120,6 +1126,7 @@ function startAuto() {
       const detection = { type: d.type, vehicleClass: d.vehicleClass, distanceM: d.distanceM, lateralM: d.lateralM, closingKmh: d.closingKmh,
         oncomingKmh: d.oncomingKmh, ownSpeedKmh: d.ownSpeedKmh, score: d.score, sightings: d.sightings, keep: settings.keepSide || 'left',
         box: d.box.map((v, i) => +(v / (i % 2 ? d.frameH : d.frameW)).toFixed(4)) };
+      if ($('fab').classList.contains('busy')) { if (pendingAuto.length < 3) pendingAuto.push(detection); return; }
       capture(detection);
     },
     onStatus: (st) => {
