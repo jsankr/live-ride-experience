@@ -48,3 +48,12 @@ test('ride events: removing false ones recounts the summary and keeps a record',
   assert.equal(out.events.length, 3); assert.equal(out.removedEvents.length, 3);
   assert.equal(removeEvents(ride, []), ride, 'nothing to remove: unchanged');
 });
+
+test('reports from the old detector (before the 27 Nov fix) can be picked out', () => {
+  const reps = [
+    { id: 'old', t: 1, auto: { closingKmh: 124, ownSpeedKmh: 57, oncomingKmh: 66, sightings: 3 } }, // 27 Nov 08:24 rear-view van
+    { id: 'new', t: 2, auto: { closingKmh: 80, ownSpeedKmh: 45, oncomingKmh: 35, oncomingMinKmh: 22, sightings: 5 } },
+    { id: 'hand', t: 3 },
+  ];
+  assert.deepEqual(selectReports(reps, { kind: 'auto-old' }), ['old']);
+});
