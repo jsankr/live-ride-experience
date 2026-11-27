@@ -18,10 +18,11 @@ if (window.__RIDELENS_SHELL_BUILD !== BUILD) {
   }
 }
 import { rememberPlace, savePlace, unsavePlace, forgetPlace, rideEnds, suggestPlaces, ago } from './places.js';
-import { inTimeRange, REPORT_KINDS, selectReports, selectClips, selectEvents, removeEvents } from './select.js';
+import { inTimeRange, REPORT_KINDS, fromOldDetector, selectReports, selectClips, selectEvents, removeEvents } from './select.js';
 import { Dashcam, fileName, retention, overlapping, stamp, DAY_PARTS } from './dashcam.js';
 import { mergeHazards, hazardsGeoJson, hazardsCsv } from './hazards.js';
 import { createNavHud } from './nav-hud.js';
+import { cleanTomTomKey, looksLikeTomTomKey, tomtomFlow } from './nav.js';
 import { createAnalyzer, comfortClass, comfortLegend, haversine } from './analytics.js';
 import { Elm327, bleTransport, wsTransport } from './obd.js';
 import { requestMotionPermission, startMotion, startGps, keepAwake } from './sensors.js';
@@ -427,7 +428,35 @@ bind('keepSide', 'keepSide', 'change', () => { if (autoStop) { stopAuto(); start
 bind('w3wKey', 'w3wKey', 'input');
 bind('navHud', 'navHud', 'change', () => { if (immersive) { navHud.stop(); navHud.start(); } });
 bind('navVoice', 'navVoice');
-bind('tomtomKey', 'tomtomKey', 'input');
+bind('tomtomKey', 'tomtomKey', 'input', () => {
+  const clean = cleanTomTomKey($('tomtomKey').value);
+  if (clean !== settings.tomtomKey) { settings.tomtomKey = clean; saveSettings(); }
+  $('tomtomStatus').textContent = !clean ? '' : looksLikeTomTomKey(clean) ? 'Saved. Tap Test key to check it.' : 'That doesn\u2019t look like a TomTom key (32 letters and digits).';
+});
+// Test the key against a real road: where you are, or Anna Salai, Chennai
+$('tomtomTest').addEventListener('click', async () => {
+  const st = $('tomtomStatus'), key = settings.tomtomKey;
+  if (!key) { st.textContent = 'Paste your key first.'; return; }
+  st.textContent = 'Checking\u2026';
+  const here = analyzer.snapshot().fix;
+  const p = here?.lat ? { lat: here.lat, lon: here.lon } : { lat: 13.0569, lon: 80.2520 };
+  try {
+    const f = await tomtomFlow(p, key);
+    st.textContent = f.currentKmh != null ? `Key works. Traffic ${here?.lat ? 'near you' : 'on Anna Salai'}: ${f.currentKmh} km/h (free-flow ${f.freeKmh}).` : 'Key works.';
+  } catch (e) {
+    st.textContent = /rejected/.test(e.message) ? 'TomTom rejected this key. Copy it again from API & SDK Keys on my.tomtom.com.' : `Couldn\u2019t reach TomTom (${e.message}). Check your connection.`;
+  }
+});
+// A link ending in #tomtom=KEY (sent from a computer) fills the key in on this phone
+{
+  const m = location.hash.match(/[#&]tomtom=([^&]+)/);
+  if (m) {
+    const k = cleanTomTomKey(decodeURIComponent(m[1]));
+    history.replaceState(null, '', location.pathname + location.search); // keep the key out of history and bookmarks
+    if (looksLikeTomTomKey(k)) { settings.tomtomKey = k; saveSettings(); $('tomtomKey').value = k; toast('TomTom key saved: live traffic is on'); }
+    else toast('That link\u2019s TomTom key doesn\u2019t look right');
+  }
+}
 bind('theme', 'theme', 'change', applyTheme);
 bind('invertYaw', 'invertYaw', 'change', () => toast('Applies from the next ride'));
 $('testServer').addEventListener('click', async () => {
@@ -1252,7 +1281,7 @@ async function renderReports() {
     <div class="item ${wsSel.has(r.id) ? 'sel' : ''}" data-id="${r.id}" role="button" tabindex="0">
       ${wsSelecting ? `<input type="checkbox" data-wspick="${r.id}" aria-label="Select report ${esc(r.plate || '')}" ${wsSel.has(r.id) ? 'checked' : ''}>` : ''}
       <img src="${thumb(r)}" alt="">
-      <span>${r.auto ? '<span class="tag-auto">AUTO</span> ' : ''}${r.plate ? `<span class="plate-tag">${esc(r.plate)}</span>` : '<span class="plate-tag none">NO PLATE</span>'} ${plates.get(r.plate) > 1 ? `<span class="status-pill critical">×${plates.get(r.plate)}</span>` : ''}<br>
+      <span>${r.auto ? '<span class="tag-auto">AUTO</span> ' : ''}${fromOldDetector(r) ? '<span class="status-pill warning" title="Old detector, before the 27 Nov fix: check the photo">OLD</span> ' : ''}${r.plate ? `<span class="plate-tag">${esc(r.plate)}</span>` : '<span class="plate-tag none">NO PLATE</span>'} ${plates.get(r.plate) > 1 ? `<span class="status-pill critical">×${plates.get(r.plate)}</span>` : ''}<br>
       <span class="muted">${esc(r.vehicleType || 'Vehicle')} · ${new Date(r.t).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · ${esc(r.status)}${r.synced ? ' · synced' : ''}</span></span>
       <span class="muted">${r.photos.length} 📷</span>
     </div>`).join('') : '<p class="empty">No reports yet. Tap the red camera button when a vehicle comes at you on the wrong side.</p>';
@@ -1299,7 +1328,10 @@ function cropsHtml(r) {
 function findingsHtml(r) {
   const a = r.analysis || {}, au = r.auto;
   const rows = [];
-  if (au) rows.push(['Direction', `Coming toward you on your ${au.keep === 'right' ? 'right' : 'left'} (front view): closed in at ${au.closingKmh} km/h while you rode at ${au.ownSpeedKmh ?? '?'} km/h, so it was moving ~${au.oncomingKmh} km/h toward you. Seen ${au.sightings}× over ${au.spanS ?? '?'} s.`]);
+  if (au && fromOldDetector(r)) rows.push(['Check first', 'Made by the old detector (before the 27 Nov fix), which took slower vehicles you were overtaking, and some parked ones, for oncoming traffic. If the photo shows the vehicle\u2019s back (tail lamps, rear plate), it was going your way: dismiss or delete this report.']);
+  // The direction is measured from how fast the vehicle's distance shrank, not from which
+  // side of it is in view: say so, so the photo is checked against it.
+  if (au) rows.push(['Direction', `Measured as coming toward you on your ${au.keep === 'right' ? 'right' : 'left'}: its distance shrank at ${au.closingKmh} km/h while you rode at ${au.ownSpeedKmh ?? '?'} km/h, so it was moving ~${au.oncomingKmh} km/h toward you${au.oncomingMinKmh != null ? ` (at least ${au.oncomingMinKmh} km/h${au.sizeMeasured ? ', size measured from the road' : ''})` : ''}. Seen ${au.sightings}× over ${au.spanS ?? '?'} s. Measured, not seen: a photo of its back means it was not wrong-side.`]);
   if (au) rows.push(['Camera focus', au.focused ? 'Moved to the vehicle before the photos' : 'Not adjustable in this browser (camera autofocus used)']);
   if (a.vehicle) rows.push(['Vehicle', `${a.vehicle.color ? `${a.vehicle.color} ` : ''}${a.vehicle.type}${a.vehicle.category && a.vehicle.category !== a.vehicle.type ? ` · ${a.vehicle.category.toLowerCase()}` : ''} (${a.vehicle.confidence != null ? `${Math.round(a.vehicle.confidence * 100)} %` : 'tracked'})${a.vehicle.riders ? ` · ${a.vehicle.riders} rider${a.vehicle.riders > 1 ? 's' : ''} seen` : ''}`]);
   if (a.plate) rows.push(['Plate read', `${a.plate.value} (OCR ${Math.round(a.plate.confidence)} %${a.plate.votes ? `, same result ${a.plate.votes}× across ${a.plate.framesRead} frame${a.plate.framesRead > 1 ? 's' : ''}` : ''}${a.plate.detector ? `, plate found ${Math.round(a.plate.detector * 100)} %` : ''})${a.plate.accepted ? '' : ' · low confidence: check it'}`]);
@@ -1652,7 +1684,7 @@ async function runTripSearch() {
 
 function startTrip(dest, targetT) {
   endTrip(true);
-  trip = createTrip({ dest, targetT });
+  trip = createTrip({ dest, targetT, routeKey: () => settings.tomtomKey || '' });
   $('tripWaze').href = wazeUrl(dest);
   $('tripGmaps').href = gmapsUrl(dest);
   $('tripDest').textContent = `To ${dest.name || `${dest.lat.toFixed(5)}, ${dest.lon.toFixed(5)}`}`;

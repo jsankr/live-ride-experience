@@ -10,7 +10,7 @@
 // hand the destination to them (deep links) and compute its own estimate.
 
 import { haversine } from './analytics.js';
-import { cumulative, locate, maneuversFrom } from './nav.js';
+import { cumulative, locate, maneuversFrom, tomtomRoute } from './nav.js';
 
 export const OSRM = 'https://router.project-osrm.org';
 export const NOMINATIM = 'https://nominatim.openstreetmap.org';
@@ -148,7 +148,8 @@ export function etaStatus({ now, remainingS, targetT, remainingM }) {
 }
 
 // ---------- trip tracker ----------
-export function createTrip({ dest, targetT = null, fetchImpl = fetch } = {}) {
+// routeKey: () => the rider's TomTom key, or '' (then OSRM, which has no live traffic)
+export function createTrip({ dest, targetT = null, fetchImpl = fetch, routeKey = () => '' } = {}) {
   const t = {
     dest, targetT, route: null, routeErr: null, routedAt: 0, offSince: 0,
     startT: null, lastFix: null, lastProj: null,
@@ -159,6 +160,14 @@ export function createTrip({ dest, targetT = null, fetchImpl = fetch } = {}) {
   };
 
   async function fetchRoute(from) {
+    const key = routeKey();
+    if (key) {
+      try {
+        t.route = await tomtomRoute(from, dest, key, fetchImpl);
+        t.routedAt = Date.now(); t.routeErr = null; t.lastProj = null; t.offSince = 0; t.liveErr = null;
+        return t.route;
+      } catch (e) { t.liveErr = e.message; /* fall back to OSRM below: a route without traffic beats none */ }
+    }
     const url = `${OSRM}/route/v1/driving/${from.lon},${from.lat};${dest.lon},${dest.lat}?overview=full&geometries=geojson&annotations=distance,duration&steps=true`;
     const res = await fetchImpl(url);
     if (!res.ok) throw new Error(`routing server answered ${res.status}`);
@@ -194,6 +203,8 @@ export function createTrip({ dest, targetT = null, fetchImpl = fetch } = {}) {
     t.straightKm = haversine(fix.lat, fix.lon, dest.lat, dest.lon) / 1000;
     if (t.straightKm < 0.05) t.arrived = true;
     if (!t.route) return true;
+    // a live-traffic route goes stale: fetch it again every 3 minutes for fresh ETA and traffic
+    if (t.route.live && now - t.routedAt > 180000 && !t.arrived) return true;
     const proj = projectOnRoute(t.route.coords, fix);
     if (proj.d > 80 && (fix.accuracy ?? 0) < 50) {
       t.offSince ||= now;
@@ -224,7 +235,8 @@ export function createTrip({ dest, targetT = null, fetchImpl = fetch } = {}) {
       out.remainingKm = rem.meters / 1000;
       out.routeEta = etaStatus({ now, remainingS: rem.seconds, targetT, remainingM: rem.meters });
       if (p) out.paceEta = { ...etaStatus({ now, remainingS: rem.seconds * p, targetT, remainingM: rem.meters }), pace: p };
-      out.source = t.route.source;
+      out.source = t.route.source + (t.liveErr && !t.route.live ? ` (TomTom live traffic failed: ${t.liveErr})` : '');
+      out.live = !!t.route.live;
       out.remainingS = rem.seconds * (p || 1);
       if (t.route.cum && t.lastFix) out.travelledM = locate(t.route.coords, t.route.cum, t.lastFix).along;
     } else if (t.straightKm != null && t.avgKmh) {

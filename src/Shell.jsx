@@ -310,9 +310,11 @@ export function Shell() {
           <label className="check"><input type="checkbox" id="camFullSet" defaultChecked /> <span>Open the camera full screen when it starts</span></label>
           <label className="check"><input type="checkbox" id="navHud" defaultChecked /> <span><b>Navigation on the full-screen camera</b>: a small heading-up map in the top-right corner, the next turn and how far, ETA, traffic ahead, and an alert before each pothole or speed breaker.</span></label>
           <label className="check"><input type="checkbox" id="navVoice" defaultChecked /> <span>Speak turn and hazard warnings (to a helmet headset)</span></label>
-          <details className="fine"><summary>Live traffic (optional TomTom key)</summary>
-            <label>TomTom API key <input id="tomtomKey" type="password" autoComplete="off" placeholder="from developer.tomtom.com" /></label>
-            <p>Waze and Google Maps don't share live traffic with other apps. With a free TomTom key (stored only on this phone), RideLens checks the speed on the road 0.4, 1.2 and 2.5 km ahead every 2 minutes during a trip (about 90 requests an hour; the free plan allows 2,500 a day). Without a key, traffic isn't shown.</p>
+          <details className="fine" id="tomtomBox"><summary>Live traffic (optional TomTom key)</summary>
+            <label>TomTom API key <input id="tomtomKey" type="password" autoComplete="off" spellCheck="false" placeholder="32 letters and digits, from my.tomtom.com" /></label>
+            <div className="row"><button type="button" className="btn" id="tomtomTest">Test key</button> <span id="tomtomStatus" role="status"></span></div>
+            <p><b>Get a free key (about 2 minutes):</b> open <a href="https://my.tomtom.com" target="_blank" rel="noopener">my.tomtom.com</a>, register and confirm your email, then go to <b>API &amp; SDK Keys</b>. A key called <b>My first API key</b> is already there: tap it to copy, and paste it here. Got it on a computer? Open <code>https://jsankr.github.io/live-ride-experience/#tomtom=YOUR_KEY</code> on this phone and it is filled in for you.</p>
+            <p>Waze and Google Maps don't share live traffic with other apps. With your key (stored only on this phone), RideLens checks the speed on the road 0.4, 1.2 and 2.5 km ahead every 2 minutes during a trip, about 90 requests an hour. Without a key, traffic isn't shown.</p>
           </details>
           <label className="check"><input type="checkbox" id="rawLog" /> <span>Keep raw sensor data with each ride (about 10 MB per hour). Lets a ride be re-analysed later when detection improves, and helps tune pothole detection for your bike.</span></label>
           <label>Units <select id="units"><option value="metric">km/h, °C, m</option><option value="imperial">mph, °F, ft</option></select></label>

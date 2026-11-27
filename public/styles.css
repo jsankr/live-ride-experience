@@ -520,3 +520,4 @@ table.events tr.sel td { background: color-mix(in srgb, var(--status-critical) 1
 .hud-hz-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; background: #ffc400; box-shadow: 0 0 2px rgba(0, 0, 0, .6); }
 .hud-hz-dot.pothole { background: #ff6a1a; }
 @media (prefers-reduced-motion: reduce) { .hud-map-inner { transition: none; } .hud-hazard:not([hidden]) { animation: none; } }
+.hud-hazard.incident { background: rgba(205, 30, 30, .95); color: #fff; }
