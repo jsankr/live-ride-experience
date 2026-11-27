@@ -70,7 +70,12 @@ function toast(msg, ms = 2600) {
 let currentView = 'live';
 let yt = null; // YouTube Music player, created on first use
 let musicCardVisible = false;
+// full-screen camera state (declared before show(), which reads it)
+let immersive = false, hudTimer = null, hudAlertTimer = null;
 function show(view) {
+  // Full-screen camera hides the tab bar and top bar and covers the window: it only makes
+  // sense on the camera screen, so going anywhere else leaves it first.
+  if (immersive && view !== 'wrongside') setImmersive(false);
   currentView = view;
   const tq = document.getElementById('tripQuick'); if (tq) tq.hidden = view !== 'live'; // trip pill only on Live
   refreshMusicFab();
@@ -205,7 +210,10 @@ async function startRide() {
   $('recLabel').textContent = 'Stop';
   keepAwake(true);
   setBanner('');
-  show('live');
+  // Started from the full-screen camera: stay on it (the HUD shows the ride). Otherwise
+  // go to the dashboard. Switching to the dashboard while full screen left the page
+  // without its tab bar, top bar or the HUD's Exit button.
+  if (!immersive) show('live');
   // Ask, but judge by whether data actually arrives: permission answers differ between browsers.
   const t0 = Date.now();
   let permErr = null;
@@ -942,7 +950,6 @@ $('camToggle').addEventListener('click', async () => {
 });
 
 // ---------------- full-screen camera with transparent HUD ----------------
-let immersive = false, hudTimer = null, hudAlertTimer = null;
 function setImmersive(on) {
   immersive = on;
   document.body.classList.toggle('immersive', on);
