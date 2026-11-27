@@ -191,7 +191,9 @@ export function createAnalyzer(options = {}) {
     while (rb.length > 2 && raw - rb[0] > 2000) rb.shift();
     const iv = rb.length > 10 && raw > rb[0] ? clamp((raw - rb[0]) / (rb.length - 1), 4, 50) : 16.7;
     s.imuN = (s.imuN || 0) + 1;
-    if (s.lastImuT != null && raw - s.lastImuT < 0.5 * iv) { s.imuSpread = (s.imuSpread || 0) + 1; return Math.min(s.lastImuT + iv, raw + 1000); }
+    if (raw === s.lastRawT) s.imuSpread = (s.imuSpread || 0) + 1; // same timestamp as the one before: bunched
+    s.lastRawT = raw;
+    if (s.lastImuT != null && raw - s.lastImuT < 0.5 * iv) return Math.min(s.lastImuT + iv, raw + 1000);
     return raw;
   }
 
