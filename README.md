@@ -134,7 +134,9 @@ With **Hands-free** ticked, RideLens watches by itself.
   - dashcam stamp drawn at 20 fps; pre-roll frame every 0.7 s.
 - **Evidence analysis (once per detection, on the saved photos only, so no extra heat while riding):**
   - **Focus and zoom:** the camera focus is moved onto the vehicle where the browser allows it (Chrome on Android). iPhone browsers give web pages no focus control, so the camera's own autofocus is used there. Frames after the trigger are kept at full camera resolution, and the vehicle, rider and plate are cropped from them (digital zoom).
-  - **Number plate:** found by a YOLOv9-t plate detector ([open-image-models](https://github.com/ankandrew/open-image-models), MIT), then read by OCR on just that strip and checked against Indian formats.
+  - **Number plate:** found by a YOLOv9-t plate detector ([open-image-models](https://github.com/ankandrew/open-image-models), MIT), then read by the PP-OCR English text-line recogniser ([PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR), Apache-2.0; ONNX from [monkt/paddleocr-onnx](https://huggingface.co/monkt/paddleocr-onnx)) several ways and checked against Indian formats. A plate fills the registration field only when two readings agree and beat every other reading; Tesseract is the fallback.
+  - **Which vehicle:** after a hands-free alert the watcher keeps following that vehicle for up to 2.5 s and saves sensor-resolution crops of it from the exact frames it was measured in (closest view first, focus moved onto it where the phone allows). Type, two-/four-wheeler, colour and plate are read from those crops.
+  - **Parked vehicles are not reported:** a vehicle must be moving toward you on its own. Its real size is measured from where its tyres meet the road, so a small parked car or scooter facing you does not pass for oncoming.
   - **Plate reading, tested on a real photo (TN 11 AH 1895):**
     - the plate detector runs on the whole photo (on a tight crop it missed the plate);
     - OCR runs five preprocessing variants per frame, and the reads vote: the correct plate came out 9 times over 3 frames, while each wrong read appeared once;

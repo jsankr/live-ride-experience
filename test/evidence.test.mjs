@@ -24,3 +24,25 @@ test('plate voting: the same valid registration twice beats one confident read',
   assert.equal(votePlates([{ value: 'TN010195', confidence: 18, detector: null, frame: 0 }]).accepted, false, 'one weak read is only a suggestion');
   assert.equal(votePlates([]), null);
 });
+
+// ---- plate text model (27 Nov 2026 frames) ----
+import { ctcDecode } from '../public/js/ai-models.js';
+import { votePlates as vote2 } from '../public/js/evidence-analysis.js';
+import { plateFromText as pft } from '../public/js/reports.js';
+test('CTC decode collapses repeats, skips blanks, keeps a repeat split by a blank', () => {
+  const dict = ['', '9', 'T', 'N'];
+  const steps = [2, 2, 3, 0, 1, 1, 0, 1]; // T T N _ 9 9 _ 9  -> "TN99"
+  const scores = new Float32Array(steps.length * 4);
+  steps.forEach((c, t) => { scores[t * 4 + c] = 0.9; });
+  assert.deepEqual(ctcDecode(scores, steps.length, 4, dict).text, 'TN99');
+});
+test('a 0 in the series position is a D (series never uses O)', () => {
+  assert.equal(pft('TN19809993'), 'TN19BD9993');
+  assert.equal(pft('TN 19 BD 9993'), 'TN19BD9993');
+});
+test('plate-model reads need two agreeing reads that beat every other reading', () => {
+  const r = (value, confidence) => ({ value, confidence, frame: 0, detector: 0.7, engine: 'plate-ocr' });
+  assert.equal(vote2([r('TN19D9993', 95)]).accepted, false, 'one confident read is not enough');
+  assert.equal(vote2([r('TN19BD9993', 90), r('TN19BD9993', 80)]).accepted, true);
+  assert.equal(vote2([r('TN19BD9993', 90), r('TN19BD9993', 80), r('TN19D9993', 85), r('TN19D9993', 70)]).accepted, false, 'a tie is not accepted');
+});

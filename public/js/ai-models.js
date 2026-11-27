@@ -5,6 +5,12 @@
 //  * Number-plate detector: YOLOv9-t 384 from ankandrew/open-image-models (MIT licence),
 //    mirror huggingface.co/wide-video/open-image-models-v0.5.1. Output [N, 7] =
 //    [batch, x1, y1, x2, y2, class, score] in the 384x384 letterboxed input.
+//  * Plate text recogniser: PP-OCR English text-line recogniser (PaddleOCR, Apache-2.0),
+//    ONNX export from huggingface.co/monkt/paddleocr-onnx (languages/english/rec.onnx).
+//    Input [1, 3, 48, W] RGB scaled to -1..1; output [1, T, classes] CTC over the dictionary
+//    in plate-rec-en-dict.txt (index 0 = blank, last = space). Tesseract, which the app used
+//    before, read nothing from sharp Indian plates (tested on 27 Nov ride frames); this reads
+//    them, with the plate grammar in reports.js fixing B/8 and D/0 confusions.
 //  * Helmet classifier: EfficientNet-B0 "helmet_v5" from huggingface.co/vivekvar/helmet-v5
 //    (Apache-2.0), trained on Indian traffic-camera rider crops. Input 224x224 RGB with
 //    ImageNet normalisation; logits [helmet, no_helmet]. Its validation accuracy was 81 %
@@ -121,4 +127,60 @@ export function headBox([x, y, w, h]) {
   return [x + w / 2 - side / 2, y - side * 0.08, side, side];
 }
 
-export async function warmUp() { await Promise.all([session('plate', 'plate-yolov9t-384.onnx'), session('helmet', 'helmet_v5.onnx', 'helmet_v5.onnx.data')]); }
+export async function warmUp() { await Promise.all([session('plate', 'plate-yolov9t-384.onnx'), session('platerec', 'plate-rec-en.onnx'), plateDict(), session('helmet', 'helmet_v5.onnx', 'helmet_v5.onnx.data')]); }
+
+// ---- number-plate text ----
+let recDict = null;
+async function plateDict() {
+  recDict ??= fetch(new URL('plate-rec-en-dict.txt', MODEL_DIR)).then((r) => r.text()).then((t) => {
+    const lines = t.replace(/\r/g, '').split('\n');
+    if (lines[lines.length - 1] === '') lines.pop();
+    return ['', ...lines, ' '];
+  }).catch((e) => { recDict = null; throw e; });
+  return recDict;
+}
+// CTC greedy decode of [T, C] scores: { text, confidence 0..1 }
+export function ctcDecode(scores, T, C, dict) {
+  let prev = 0, text = '', sum = 0, n = 0;
+  for (let t = 0; t < T; t++) {
+    let best = 0, bv = -Infinity;
+    for (let c = 0; c < C; c++) { const v = scores[t * C + c]; if (v > bv) { bv = v; best = c; } }
+    if (best !== 0 && best !== prev) { text += dict[best] ?? ''; sum += bv; n++; }
+    prev = best;
+  }
+  return { text, confidence: n ? sum / n : 0 };
+}
+async function recogniseLine(image, [x, y, w, h], stretch = 2) {
+  const ort = await loadOrt();
+  const s = await session('platerec', 'plate-rec-en.onnx');
+  const dict = await plateDict();
+  // Stretched 2x sideways: a plate 100 px wide otherwise gives the model ~17 time steps for
+  // 10 characters and repeated ones merge (TN19BD9993 read as TN1980993); stretched, it
+  // read the same plate correctly in every variant tried.
+  const H = 48, W = Math.max(16, Math.min(640, Math.round((w * H * stretch) / Math.max(1, h))));
+  const c = canvasOf(W, H), g = c.getContext('2d', { willReadFrequently: true });
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(image, x, y, w, h, 0, 0, W, H);
+  const { data } = g.getImageData(0, 0, W, H), n = W * H, f = new Float32Array(3 * n);
+  for (let i = 0; i < n; i++) for (let k = 0; k < 3; k++) f[k * n + i] = (data[i * 4 + k] / 255 - 0.5) / 0.5;
+  const out = (await s.run({ [s.inputNames[0]]: new ort.Tensor('float32', f, [1, 3, H, W]) }))[s.outputNames[0]];
+  const [, T, C] = out.dims;
+  // the model ends in softmax; if a build gives logits, the argmax is the same
+  return ctcDecode(out.data, T, C, dict);
+}
+// Text on a detected plate box (image pixels). Square-ish boxes are two-line plates (most
+// two-wheelers): each half is read and joined. Returns candidate texts, best first.
+export async function readPlateText(image, box) {
+  const [x, y, w, h] = clampBox(image, box);
+  const reads = [];
+  for (const m of [0, 0.04]) { // tight, and with a little margin
+    const b = clampBox(image, [x - w * m, y - h * m, w * (1 + 2 * m), h * (1 + 2 * m)]);
+    for (const stretch of [2, 1.5]) reads.push(await recogniseLine(image, b, stretch));
+    if (w / h < 2.4) { // two-line plate
+      const top = await recogniseLine(image, [b[0], b[1], b[2], b[3] * 0.52]);
+      const bottom = await recogniseLine(image, [b[0], b[1] + b[3] * 0.48, b[2], b[3] * 0.52]);
+      reads.push({ text: `${top.text} ${bottom.text}`, confidence: Math.min(top.confidence, bottom.confidence) });
+    }
+  }
+  return reads.sort((a, b) => b.confidence - a.confidence);
+}

@@ -168,7 +168,7 @@ test('wrong-side rider flickering between person and motorcycle is still one tra
 });
 
 test('low-confidence (0.32) head-on two-wheeler is tracked', () => {
-  const a = drive({ own: 50, closingKmh: 50 + 20, start: 30, make: (d) => [box('motorcycle', d, -1.5, { score: 0.32 })] });
+  const a = drive({ own: 50, closingKmh: 50 + 25, start: 30, make: (d) => [box('motorcycle', d, -1.5, { score: 0.32 })] });
   assert.equal(a.length, 1);
 });
 
@@ -212,4 +212,61 @@ test('tail-lamp check: red on both sides = rear; red all over = not rear', () =>
 test('portrait crop fed to the detector is close to square', () => {
   const [, , w, h] = watchRegion('left', 1080, 1984);
   assert.ok(h / w <= 1.35, `aspect ${h / w}`);
+});
+
+// ---- parked vehicles facing us on the kerb are not wrong-side riders ----
+// box of a vehicle with a given REAL size (not the class average)
+function sized(cls, d, lateral, realW, realH) {
+  const w = (realW / d) * F, h = (realH / d) * F, cx = (0.5 + lateral / (2 * d * tanHalf)) * W;
+  const bottom = H * 0.45 + (1.1 / d) * F;
+  return { class: cls, score: 0.8, rear: false, bbox: [cx - w / 2, bottom - h, w, h] };
+}
+test('parked vehicles of any size, facing us at the kerb, are never flagged', () => {
+  for (const [cls, w, h] of [['car', 1.6, 1.42], ['car', 1.8, 1.95], ['truck', 1.4, 1.7], ['truck', 2.5, 3.5], ['motorcycle', 0.6, 1.1], ['motorcycle', 0.9, 1.2], ['bus', 2.55, 3.2]]) {
+    for (const own of [20, 40, 65]) {
+      const a = drive({ own, closingKmh: own, start: 35, make: (d) => [sized(cls, d, -2.2, w, h)] });
+      assert.equal(a.length, 0, `${cls} ${w}x${h} parked, us ${own}: ${JSON.stringify(a[0])}`);
+    }
+  }
+});
+test('a parked scooter is not flagged while GPS lags behind our acceleration', () => {
+  const tr = createWrongSideTracker({ fovDeg: FOV });
+  const alerts = [];
+  for (let t = 0, d = 35, v = 30; d > 4; t += 0.25) {
+    v += 1.5 * 3.6 * 0.25; d -= (v / 3.6) * 0.25; // accelerating 1.5 m/s²
+    alerts.push(...tr.update(t * 1000, [sized('motorcycle', d, -2, 0.62, 1.1)], W, H, v - 1.5 * 3.6)); // GPS ~1 s behind
+  }
+  assert.equal(alerts.length, 0);
+});
+test('a small wrong-side scooter coming at us IS flagged, with its size measured from the road', () => {
+  const a = drive({ own: 40, closingKmh: 40 + 25, start: 35, make: (d) => [sized('motorcycle', d, -1.6, 0.62, 1.1)] });
+  assert.equal(a.length, 1);
+  assert.ok(Math.abs(a[0].sizeMeasured - 0.62) < 0.08, `measured ${a[0].sizeMeasured}`);
+  assert.equal(a[0].category, 'Two-wheeler');
+});
+
+// ---- evidence: follow the alerted vehicle and keep its closest views ----
+import { createSubjectFollower, subjectCrop } from '../public/js/wrongside-watch.js';
+test('follower keeps the first and the largest views, and hands over when the vehicle leaves', () => {
+  const f = createSubjectFollower({ followS: 2.5, keepShots: 3 });
+  f.start({ trackId: 7 }, 0);
+  for (const a of [100, 50, 400, 900, 30, 2500]) f.add(7, { areaPx: a });
+  assert.deepEqual(f.get(7).shots.map((s) => s.areaPx), [100, 900, 2500]);
+  const tracks = [{ id: 7, last: { t: 1, clipped: false } }];
+  assert.equal(f.due(1, tracks).length, 0, 'still in view');
+  tracks[0].last = { t: 1.25, clipped: true };
+  const done = f.due(1.25, tracks);
+  assert.equal(done.length, 1); assert.equal(done[0].alert.trackId, 7);
+  assert.equal(f.has(7), false);
+});
+test('follower hands over after the follow time even if the vehicle is still seen', () => {
+  const f = createSubjectFollower({ followS: 2.5 });
+  f.start({ trackId: 1 }, 0);
+  assert.equal(f.due(3, [{ id: 1, last: { t: 3, clipped: false } }]).length, 1);
+});
+test('evidence crop leaves room above for the rider and stays inside the frame', () => {
+  const [x, y, w, h] = subjectCrop([100, 400, 100, 200], 1080, 1920);
+  assert.ok(y <= 400 - 100 && x < 100 && x + w > 200 && y + h > 600);
+  const c = subjectCrop([0, 0, 50, 50], 1080, 1920);
+  assert.equal(c[0], 0); assert.equal(c[1], 0);
 });
