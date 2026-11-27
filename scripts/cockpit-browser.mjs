@@ -233,7 +233,10 @@ try {
   await evidencePage.locator('#hudZoom').waitFor();
   assert.equal((await evidencePage.locator('#hudAlert').innerText()).trim(), '✓ Saved');
   if (screenshots) await evidencePage.screenshot({ path: join(screenshots, 'camera-autozoom.png') });
+  // the HUD's Menu: leave full screen to the camera page (it used to be a plain Exit button)
   await evidencePage.locator('#hudExit').click();
+  assert.equal(await evidencePage.locator('#hudMenu').isVisible(), true, 'Menu opens');
+  await evidencePage.locator('#hudMenu button[data-go="camera"]').click();
   // Poll explicitly: an async predicate returns a Promise, which waitForFunction treats as
   // truthy at once, so the old wait passed before the analysis had been saved.
   for (let i = 0; ; i++) {

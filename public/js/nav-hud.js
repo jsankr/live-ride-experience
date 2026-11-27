@@ -200,6 +200,7 @@ export function createNavHud({ L, $, getTrip, getOwnSpots, settings, imperial, f
   return {
     // our speed from the navigation GPS, when no ride is being recorded to supply it
     get speedKmh() { return fix && Date.now() - fix.t < 5000 ? speedKmh : null; },
+    get fix() { return fix && Date.now() - fix.t < 5000 ? fix : null; },
     start() {
       if (settings.navHud === false || stopGps) return;
       $('hudNav').hidden = false;
