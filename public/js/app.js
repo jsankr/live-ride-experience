@@ -960,7 +960,7 @@ function setImmersive(on) {
     window.scrollTo(0, 0);
     updateHud(); hudTimer = setInterval(updateHud, 500);
     navHud.start();
-  } else { navHud.stop(); }
+  } else { navHud.stop(); if ($('hudMenu')) hudMenu(false); }
   if (!on && document.fullscreenElement) { try { document.exitFullscreen?.()?.catch?.(() => {}); } catch {} }
 }
 function updateHud() {
@@ -969,8 +969,9 @@ function updateHud() {
   const navKmh = navHud.speedKmh;
   $('hudSpeed').textContent = fresh || sn.speedSrc === 'obd' ? fmtSpeed(sn.speedKmh) : navKmh != null ? fmtSpeed(navKmh) : '—';
   $('hudUnit').textContent = speedUnit();
-  $('hudGps').textContent = fresh ? `GPS ±${Math.round(sn.fix.accuracy ?? 0)} m` : 'GPS —';
-  $('hudGps').classList.toggle('warn', !fresh);
+  const gpsFix = fresh ? sn.fix : navHud.fix; // no ride recording: the navigation GPS
+  $('hudGps').textContent = gpsFix ? `GPS ±${Math.round(gpsFix.accuracy ?? 0)} m` : 'GPS —';
+  $('hudGps').classList.toggle('warn', !gpsFix);
   $('hudClock').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const rec = !!dashcam;
   $('hudRec').classList.toggle('on', rec);
@@ -1083,7 +1084,22 @@ document.addEventListener('pointerdown', () => { requestMotionPermission().catch
 window.__voice = { parseCommand, runVoice }; // for diagnostics/tests
 window.__autoCapture = (detection) => capture(detection); // diagnostics/tests: the path a hands-free detection takes
 $('camFull').addEventListener('click', async () => { if (!camOn) await setCamera(true); if (camOn) setImmersive(true); });
-$('hudExit').addEventListener('click', () => setImmersive(false));
+// Menu on the full-screen camera: straight to another screen, or back to the camera page.
+// (Every screen but the camera leaves full screen by itself: see show().)
+let hudMenuTimer = null;
+function hudMenu(open) {
+  $('hudMenu').hidden = !open; $('hudExit').setAttribute('aria-expanded', String(open));
+  clearTimeout(hudMenuTimer); if (open) hudMenuTimer = setTimeout(() => hudMenu(false), 8000); // don't cover the road for long
+}
+$('hudExit').addEventListener('click', () => hudMenu($('hudMenu').hidden));
+$('hudMenu').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-go]'); if (!b) return;
+  hudMenu(false);
+  const go = b.dataset.go;
+  if (go === 'camera') setImmersive(false);
+  else if (go === 'report' && currentRide) openRide(currentRide);
+  else show(go);
+});
 $('hudAuto').addEventListener('click', () => { const cb = $('autoWatch'); cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); updateHud(); });
 $('hudDash').addEventListener('click', () => { const cb = $('dcOn'); cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); updateHud(); });
 $('hudRide').addEventListener('click', () => { $('recBtn').click(); setTimeout(updateHud, 300); });

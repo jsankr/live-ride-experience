@@ -524,3 +524,8 @@ table.events tr.sel td { background: color-mix(in srgb, var(--status-critical) 1
 #tripMic.on { color: #fff; background: var(--status-critical, #c0392b); border-color: transparent; animation: micPulse 1s ease-in-out infinite; }
 @keyframes micPulse { 50% { opacity: .65; } }
 @media (prefers-reduced-motion: reduce) { #tripMic.on { animation: none; } }
+/* full-screen camera menu: large targets for gloves, above the button row */
+.hud-menu:not([hidden]) { position: absolute; left: 10px; right: 10px; bottom: calc(76px + env(safe-area-inset-bottom, 0px)); display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 10px; border-radius: 18px; background: rgba(10, 14, 12, .82); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); z-index: 4; }
+.hud-menu button { display: grid; justify-items: center; gap: 4px; min-height: 64px; padding: 8px 4px; border-radius: 14px; border: 1px solid rgba(255, 255, 255, .22); background: rgba(255, 255, 255, .1); color: #fff; font: 600 13px/1.1 inherit; }
+.hud-menu button svg { width: 26px; height: 26px; }
+.hud-menu button.wide { grid-column: 1 / -1; grid-template-columns: auto auto; justify-content: center; align-items: center; min-height: 52px; gap: 10px; }
