@@ -854,8 +854,9 @@ function saveAnalysis(id, analysis) {
     const plate = analysis.plate;
     return {
       ...current, analysis,
-      vehicleType: current.vehicleType || (vehicle?.confidence >= 0.5 ? vehicle.type : ''),
-      color: current.color || (vehicle?.confidence >= 0.5 ? vehicle.color || '' : ''),
+      vehicleType: current.vehicleType || (vehicle?.confidence >= 0.5 || vehicle?.locked ? vehicle.type : ''),
+      category: current.category || (vehicle?.confidence >= 0.5 || vehicle?.locked ? vehicle.category || '' : ''),
+      color: current.color || (vehicle?.confidence >= 0.5 || vehicle?.locked ? vehicle.color || '' : ''),
       // a valid registration read in 2+ frames, or found by the plate model and read clearly enough
       plate: current.plate || (plate?.accepted ?? plate?.confidence >= 75 ? plate.value : ''),
       plateValid: current.plate ? current.plateValid : !!(plate?.accepted ?? plate?.confidence >= 75),
@@ -1038,7 +1039,7 @@ async function capture(detection = null) {
   const fab = $('fab');
   if (fab.classList.contains('busy')) return;
   fab.classList.add('busy');
-  const capturedAt = Date.now();
+  const capturedAt = detection?.context?.t ?? Date.now(); // auto: the moment the vehicle was recognised
   const snap = analyzer.snapshot();
   const associatedRide = recording ? rideId : null;
   const air = evidenceLocation.snapshot();
@@ -1047,8 +1048,17 @@ async function capture(detection = null) {
     if (!camOn) return;
     navigator.vibrate?.(60);
     // focus on the detected vehicle before the full-resolution frames are taken
-    let focused = false, zoomed = null;
-    if (detection?.box) {
+    let focused = false, zoomed = null, frames, fix;
+    if (detection?.shots?.length) {
+      // hands-free: the watcher already followed the vehicle and kept sensor-resolution shots
+      // of it from the very frames it was measured in (focused on it where the phone allows),
+      // so nothing is zoomed or re-shot here, and the detector never pauses
+      const ctx = detection.context;
+      frames = [...(ctx?.blob ? [{ blob: ctx.blob, t: ctx.t, key: true, frameBox: ctx.frameBox }] : []),
+        ...detection.shots.map((s) => ({ blob: s.blob, t: s.t, key: !ctx?.blob && s === detection.shots[0], subjectBox: s.subjectBox, frameBox: s.frameBox, distanceM: s.distanceM, subject: true }))];
+      fix = await evidenceLocation.fixAt(ctx?.t ?? capturedAt);
+      focused = true;
+    } else if (detection?.box) {
       const [bx, by, bw, bh] = detection.box;
       evidenceBusy = true; // the detector pauses while the picture is zoomed
       zoomed = await camera.zoomFor(detection.box);
@@ -1057,17 +1067,19 @@ async function capture(detection = null) {
       focused = await camera.focusAt(Math.min(1, Math.max(0, cx)), Math.min(1, Math.max(0, cy)));
       if (focused || zoomed) await new Promise((r) => setTimeout(r, zoomed ? 400 : 250));
     }
-    let frames, fix;
-    try { [frames, fix] = await Promise.all([camera.burst(), evidenceLocation.fixAt(capturedAt)]); }
-    finally { zoomed?.restore(); evidenceBusy = false; }
-    if (detection?.box) showZoomInset(frames, detection.box, zoomed?.zoom || 1);
+    if (!frames) {
+      try { [frames, fix] = await Promise.all([camera.burst(), evidenceLocation.fixAt(capturedAt)]); }
+      finally { zoomed?.restore(); evidenceBusy = false; }
+      if (detection?.box) showZoomInset(frames, detection.box, zoomed?.zoom || 1);
+    }
     if (!frames.length) throw new Error('No frames captured');
     const airQuality = fix && air?.cell === airCell(fix) && Math.abs(air.time - capturedAt) <= 90 * 60000 ? air : null;
     const speed = associatedRide && snap.speedSrc !== 'none' ? snap.speedKmh : null;
     let rep = await saveReport({ frames, snapshot: { fix, speedKmh: speed }, rideId: associatedRide, capturedAt, airQuality });
     if (detection) {
       // hands-free trigger: keep the measurements that caused it, pre-fill the vehicle type
-      rep = await db.updateReport(rep.id, (r) => ({ ...r, auto: { ...detection, focused, opticalZoom: zoomed?.zoom ?? null }, vehicleType: r.vehicleType || detection.type,
+      const { shots, context, ...measured } = detection; // the photos are stored once, as the report's photos
+      rep = await db.updateReport(rep.id, (r) => ({ ...r, auto: { ...measured, focused, opticalZoom: zoomed?.zoom ?? null, shots: shots?.length ?? 0 }, vehicleType: r.vehicleType || detection.type,
         notes: r.notes || `Auto-detected: ${detection.type} coming toward you on your ${detection.keep === 'right' ? 'right' : 'left'} (wrong side), ~${detection.distanceM} m away, its own speed ~${detection.oncomingKmh} km/h toward you while you rode at ${detection.ownSpeedKmh ?? '?'} km/h.` })) || rep;
     }
     if (recording && rideId === associatedRide) {
@@ -1091,7 +1103,12 @@ async function capture(detection = null) {
       if (currentView === 'wrongside') renderReports();
     }).catch(() => {});
 
-  } catch (e) { toast(e.message, 4000); } finally { fab.classList.remove('busy'); }
+  } catch (e) { toast(e.message, 4000); } finally {
+    fab.classList.remove('busy');
+    // a second vehicle detected while this one was being saved: its frames are still in the
+    // camera's 4 s ring buffer, so save it now instead of dropping it
+    if (pendingAuto.length) { const next = pendingAuto.shift(); setTimeout(() => capture(next), 0); }
+  }
 }
 $('fab').addEventListener('click', () => capture());
 $('captureBtn').addEventListener('click', () => capture());
@@ -1109,6 +1126,7 @@ document.addEventListener('keydown', (e) => {
 
 // ---------------- hands-free wrong-side detection ----------------
 let autoStop = null;
+const pendingAuto = []; // auto-detections waiting while a capture is being saved
 function startAuto() {
   if (autoStop || !camOn) return;
   $('autoStatus').textContent = 'Loading vehicle detector…';
@@ -1116,10 +1134,15 @@ function startAuto() {
     video: $('camVideo'), overlay: $('camOverlay'), loadDetector, keep: settings.keepSide || 'left',
     isPaused: () => evidenceBusy, isDiscreet: () => immersive && settings.discreet !== false,
     getOwnSpeedKmh: () => { const sn = analyzer.snapshot(); return sn.speedSrc !== 'none' && Date.now() - (sn.fix?.t ?? 0) < 5000 ? sn.speedKmh : null; },
+    focusOn: (nx, ny) => camera.focusAt(nx, ny),
+    // the moment a wrong-side vehicle is recognised (photos follow ~1-2 s later, when it is closest)
+    onDetect: () => navigator.vibrate?.(60),
     onAlert: (d) => {
-      const detection = { type: d.type, vehicleClass: d.vehicleClass, distanceM: d.distanceM, lateralM: d.lateralM, closingKmh: d.closingKmh,
-        oncomingKmh: d.oncomingKmh, ownSpeedKmh: d.ownSpeedKmh, score: d.score, sightings: d.sightings, keep: settings.keepSide || 'left',
+      const detection = { type: d.type, category: d.category, vehicleClass: d.vehicleClass === 'person' ? 'motorcycle' : d.vehicleClass, distanceM: d.distanceM, lateralM: d.lateralM, closingKmh: d.closingKmh,
+        oncomingKmh: d.oncomingKmh, oncomingMinKmh: d.oncomingMinKmh, sizeMeasured: d.sizeMeasured, shots: d.shots, context: d.context,
+        ownSpeedKmh: d.ownSpeedKmh, score: d.score, sightings: d.sightings, keep: settings.keepSide || 'left',
         box: d.box.map((v, i) => +(v / (i % 2 ? d.frameH : d.frameW)).toFixed(4)) };
+      if ($('fab').classList.contains('busy')) { if (pendingAuto.length < 3) pendingAuto.push(detection); return; }
       capture(detection);
     },
     onStatus: (st) => {
@@ -1265,7 +1288,7 @@ function findingsHtml(r) {
   const rows = [];
   if (au) rows.push(['Direction', `Coming toward you on your ${au.keep === 'right' ? 'right' : 'left'} (front view): closed in at ${au.closingKmh} km/h while you rode at ${au.ownSpeedKmh ?? '?'} km/h, so it was moving ~${au.oncomingKmh} km/h toward you. Seen ${au.sightings}× over ${au.spanS ?? '?'} s.`]);
   if (au) rows.push(['Camera focus', au.focused ? 'Moved to the vehicle before the photos' : 'Not adjustable in this browser (camera autofocus used)']);
-  if (a.vehicle) rows.push(['Vehicle', `${a.vehicle.color ? `${a.vehicle.color} ` : ''}${a.vehicle.type} (${Math.round(a.vehicle.confidence * 100)} %)${a.vehicle.riders ? ` · ${a.vehicle.riders} rider${a.vehicle.riders > 1 ? 's' : ''} seen` : ''}`]);
+  if (a.vehicle) rows.push(['Vehicle', `${a.vehicle.color ? `${a.vehicle.color} ` : ''}${a.vehicle.type}${a.vehicle.category && a.vehicle.category !== a.vehicle.type ? ` · ${a.vehicle.category.toLowerCase()}` : ''} (${a.vehicle.confidence != null ? `${Math.round(a.vehicle.confidence * 100)} %` : 'tracked'})${a.vehicle.riders ? ` · ${a.vehicle.riders} rider${a.vehicle.riders > 1 ? 's' : ''} seen` : ''}`]);
   if (a.plate) rows.push(['Plate read', `${a.plate.value} (OCR ${Math.round(a.plate.confidence)} %${a.plate.votes ? `, same result ${a.plate.votes}× across ${a.plate.framesRead} frame${a.plate.framesRead > 1 ? 's' : ''}` : ''}${a.plate.detector ? `, plate found ${Math.round(a.plate.detector * 100)} %` : ''})${a.plate.accepted ? '' : ' · low confidence: check it'}`]);
   else if (a.plateBox) rows.push(['Plate read', 'Plate found but not readable: check the plate snapshot']);
   if (a.helmet) rows.push(['Helmet', a.helmet.verdict === 'not seen' ? (a.helmet.model === 'unavailable' ? 'Helmet model unavailable (offline?)' : 'Rider not visible clearly enough') : `${a.helmet.verdict === 'no helmet' ? 'Likely NO helmet' : a.helmet.verdict === 'helmet' ? 'Likely wearing a helmet' : 'Unclear'} (P(no helmet) ${a.helmet.p}, ${a.helmet.frames} frame${a.helmet.frames > 1 ? 's' : ''})`]);

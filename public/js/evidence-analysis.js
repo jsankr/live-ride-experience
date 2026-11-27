@@ -1,5 +1,5 @@
 import { normalizePlate, ocrPlate, plateFromText } from './reports.js';
-import { detectPlates, classifyHelmet, helmetVerdict, headBox } from './ai-models.js';
+import { detectPlates, classifyHelmet, helmetVerdict, headBox, readPlateText } from './ai-models.js';
 
 let model;
 function loadScript(src) {
@@ -26,6 +26,7 @@ export async function loadDetector() {
 }
 
 const labels = { motorcycle: 'Two-wheeler', car: 'Car', bus: 'Bus', truck: 'Truck / tempo', bicycle: 'Cycle' };
+export const CATEGORY = { motorcycle: 'Two-wheeler', bicycle: 'Two-wheeler', car: 'Four-wheeler', bus: 'Heavy vehicle', truck: 'Four-wheeler or heavier' };
 // hint: the auto-detection that triggered the capture ({ vehicleClass, box: normalised [x,y,w,h] }),
 // so the photos are searched for THAT vehicle rather than whatever is biggest in view.
 export function findSubjects(predictions, width, height, hint = null) {
@@ -58,6 +59,11 @@ async function cropJpeg(image, box, maxSide, quality = 0.85) {
   const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(image, x, y, w, h, 0, 0, c.width, c.height);
   return new Promise((r) => c.toBlob(r, 'image/jpeg', quality));
 }
+const iou = (a, b) => {
+  const x1 = Math.max(a[0], b[0]), y1 = Math.max(a[1], b[1]), x2 = Math.min(a[0] + a[2], b[0] + b[2]), y2 = Math.min(a[1] + a[3], b[1] + b[3]);
+  const i = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  return i / (a[2] * a[3] + b[2] * b[3] - i || 1);
+};
 const pad = ([x, y, w, h], f) => [x - w * f, y - h * f, w * (1 + 2 * f), h * (1 + 2 * f)];
 
 function imageRegion(image, box, width, height) {
@@ -137,7 +143,14 @@ export function votePlates(reads) {
   const best = [...by.values()].sort((a, b) => b.votes - a.votes || b.confidence - a.confidence)[0];
   const frames = new Set(reads.map((r) => r.frame)).size;
   // accepted = good enough to fill the registration field by itself (always reviewable)
-  const accepted = best.confidence >= 75 || best.votes >= 2 || ((best.detector ?? 0) >= 0.6 && best.confidence >= 30);
+  // A wrong plate in a police report is worse than none. The plate-text model reads a plate
+  // several ways (margins, stretch); a single read, however confident, can drop a character
+  // and still look valid (TN19D9993 for TN19BD9993), so it must be read the same way twice
+  // and beat every other reading. Tesseract-only reads keep the older rule.
+  const runnerUp = [...by.values()].filter((g) => g !== best).reduce((m, g) => Math.max(m, g.votes), 0);
+  const modelReads = reads.some((r) => r.engine === 'plate-ocr');
+  const accepted = modelReads ? best.votes >= 2 && best.votes > runnerUp
+    : best.confidence >= 75 || best.votes >= 2 || ((best.detector ?? 0) >= 0.6 && best.confidence >= 30);
   return { ...best, framesRead: frames, accepted };
 }
 
@@ -247,8 +260,12 @@ export const NOT_ASSESSED = [
 // options.allFrames: analyse every photo instead of the five sharpest ("Reanalyse all frames")
 export async function analyzeEvidence(photos, onProgress, hint = null, { allFrames = false } = {}) {
   const say = (status) => onProgress?.({ status });
-  const frames = photos.map((photo, index) => ({ ...photo, index }))
-    .sort((a, b) => (b.sharpness ?? 0) - (a.sharpness ?? 0)).slice(0, allFrames ? photos.length : 5);
+  // Photos the watcher took of the followed vehicle carry its exact box: analyse those, the
+  // closest first (most pixels on the plate). Otherwise the sharpest photos, as before.
+  const indexed = photos.map((photo, index) => ({ ...photo, index }));
+  const subjectShots = indexed.filter((p) => p.subjectBox).sort((a, b) => (a.distanceM ?? 99) - (b.distanceM ?? 99));
+  const frames = (subjectShots.length ? [...subjectShots, ...indexed.filter((p) => !p.subjectBox && p.frameBox)]
+    : indexed.sort((a, b) => (b.sharpness ?? 0) - (a.sharpness ?? 0))).slice(0, allFrames ? photos.length : 5);
   const regions = [];
   let unavailable = false;
   try {
@@ -257,7 +274,18 @@ export async function analyzeEvidence(photos, onProgress, hint = null, { allFram
       say(`Finding the vehicle: photo ${n + 1} of ${frames.length}…`);
       const image = await createImageBitmap(photo.blob);
       try {
-        const result = findSubjects(await detector.detect(image, 15, 0.35), image.width, image.height, hint);
+        const known = photo.subjectBox || photo.frameBox; // where the followed vehicle is in this photo
+        const here = known ? { ...hint, box: known } : hint;
+        let result = findSubjects(await detector.detect(image, 15, 0.3), image.width, image.height, here);
+        if (known) {
+          const kb = [known[0] * image.width, known[1] * image.height, known[2] * image.width, known[3] * image.height];
+          // the detector's box only if it is the same vehicle; else the watcher's own box
+          if (!result || iou(result.box, kb) < 0.3) {
+            const cls = hint?.vehicleClass || 'car';
+            result = { type: labels[cls] || hint?.type, vehicleClass: cls, confidence: hint?.score ?? null, rider: false, riders: 0, riderBox: null, box: kb,
+              rank: Math.sqrt(kb[2] * kb[3] / (image.width * image.height)) * (photo.subjectBox ? 1 : 0.5), locked: true };
+          } else { result.rank *= photo.subjectBox ? 2 : 1; result.locked = true; } // close-up shots first
+        }
         if (result) regions.push({ ...result, frame: photo.index });
       } finally { image.close(); }
     }
@@ -282,10 +310,22 @@ export async function analyzeEvidence(photos, onProgress, hint = null, { allFram
         if (target.box && target.box[2] * target.box[3] < 0.25 * image.width * image.height) found.push(...await detectPlates(image, pad(target.box, 0.15)));
       } catch { plateModel = 'unavailable'; }
       const inside = (b) => !target.box || (b[0] + b[2] / 2 >= target.box[0] && b[0] + b[2] / 2 <= target.box[0] + target.box[2] && b[1] + b[3] / 2 >= target.box[1] && b[1] + b[3] / 2 <= target.box[1] + target.box[3] * 1.05);
-      found = found.filter((pl) => inside(pl.box)).sort((a, b) => b.score - a.score);
+      // A plate is wider than tall (two-line two-wheeler plates ~1.7:1). The plate model also
+      // fires on the rider's own speedometer display, which is almost square: dropped here.
+      const plateShaped = (b) => b[2] / Math.max(1, b[3]) >= 1.3;
+      found = found.filter((pl) => inside(pl.box) && plateShaped(pl.box)).sort((a, b) => b.score - a.score);
       if (found.length && target.box) target.plateBox = found[0].box;
       for (const pl of found.slice(0, 1)) {
         if (!plateCrop || pl.score > plateCrop.score) plateCrop = { score: pl.score, frame: target.frame, blob: await cropJpeg(image, pad(pl.box, 0.06), 480, 0.92) };
+        // plate text model first; Tesseract only if it finds no valid registration
+        let modelRead = false;
+        try {
+          for (const r of await readPlateText(image, pl.box)) {
+            const candidate = plateCandidate({ text: r.text, confidence: Math.round(r.confidence * 100) });
+            if (candidate) { reads.push({ ...candidate, frame: target.frame, detector: +pl.score.toFixed(2), engine: 'plate-ocr' }); modelRead = true; }
+          }
+        } catch { /* model unavailable: Tesseract below */ }
+        if (modelRead) continue;
         try {
           const here = [];
           for (const [inset, mode, kind] of PLATE_VARIANTS) {
@@ -350,7 +390,10 @@ export async function analyzeEvidence(photos, onProgress, hint = null, { allFram
   }
   if (plateCrop?.blob) crops.plate = plateCrop.blob;
 
-  const vehicle = top && { type: top.type, vehicleClass: top.vehicleClass, confidence: top.confidence, color: top.color, rider: top.rider, riders: top.riders, frame: top.frame };
+  // locked: found in photos the watcher took of the vehicle it tracked, so it is the right
+  // vehicle even when the detector is unsure what to call it
+  const vehicle = top && { type: top.type, vehicleClass: top.vehicleClass, category: CATEGORY[top.vehicleClass] ?? null, confidence: top.confidence,
+    color: top.color, rider: top.rider, riders: top.riders, frame: top.frame, locked: !!top.locked };
   return {
     vehicle: vehicle ?? null, plate,
     plateBox: plateCrop ? { score: +plateCrop.score.toFixed(2), frame: plateCrop.frame } : null,

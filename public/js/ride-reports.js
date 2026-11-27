@@ -115,6 +115,7 @@ export function wrongSideReportHtml(ride, sum, images) {
       ['When', fmtDT(r.t)],
       ['Where', r.lat != null ? `<a href="${gmaps(r.lat, r.lon)}">${r.lat.toFixed(6)}, ${r.lon.toFixed(6)}</a> (±${Math.round(r.accuracy || 0)} m)` : 'No GPS fix'],
       ['Vehicle', esc(`${r.color ? `${r.color} ` : ''}${r.vehicleType || a.vehicle?.type || 'Unknown'}`)],
+      ['Category', esc(r.category || a.vehicle?.category || (/two-wheeler|cycle/i.test(r.vehicleType || '') ? 'Two-wheeler' : /car/i.test(r.vehicleType || '') ? 'Four-wheeler' : 'Not determined'))],
       ['Registration', r.plate ? `<b>${esc(r.plate)}</b>${r.plateValid ? '' : ' (format not standard, check photo)'}` : 'Not read: see plate snapshot'],
       ['Direction', au ? esc(`Coming toward the rider on the ${au.keep === 'right' ? 'right' : 'left'} (wrong side), front of vehicle facing the camera. Closing ${au.closingKmh} km/h while the rider did ${au.ownSpeedKmh ?? '?'} km/h, so the vehicle itself moved ~${au.oncomingKmh} km/h against traffic. Tracked ${au.sightings} times.`) : 'Captured by the rider (manual)'],
       ...(a.helmet && a.helmet.verdict !== 'not seen' ? [['Helmet (AI estimate)', esc(`${a.helmet.verdict} · P(no helmet) ${a.helmet.p}`)]] : []),

@@ -26,7 +26,9 @@ export function fixPlateChars(p) {
   const m = p.match(/^([A-Z0-9]{2})([A-Z0-9]{2})([A-Z0-9]{0,3})([A-Z0-9]{4})$/); // state, district, series, number
   if (!m) return p;
   const asL = (x) => x.replace(/[0-9]/g, (c) => TO_LETTER[c] || c), asD = (x) => x.replace(/[A-Z]/g, (c) => TO_DIGIT[c] || c);
-  return asL(m[1]) + asD(m[2]) + asL(m[3]) + asD(m[4]);
+  // series letters never use I or O (CMVR), so a 0 read there is a D (TN19BD9993 read as TN19B09993)
+  const asSeries = (x) => x.replace(/[0-9]/g, (c) => (c === '0' ? 'D' : TO_LETTER[c] || c));
+  return asL(m[1]) + asD(m[2]) + asSeries(m[3]) + asD(m[4]);
 }
 // Best registration in OCR text. Bolts, dots and the IND hologram split a plate into pieces
 // with junk between them, so pieces are combined in order (skipping junk) until a valid
@@ -190,7 +192,8 @@ export async function saveReport({ frames, snapshot, rideId, capturedAt = Date.n
     lat: fix?.lat ?? null, lon: fix?.lon ?? null, accuracy: fix?.accuracy ?? null,
     gpsTime: fix?.t ?? null, airQuality, analysis: { status: 'pending' },
     heading: fix?.heading ?? null, mySpeedKmh: Number.isFinite(snapshot?.speedKmh) ? Math.round(snapshot.speedKmh) : null,
-    photos: frames.map((f) => ({ t: f.t, blob: f.blob, key: !!f.key })),
+    // subjectBox: where the tracked vehicle is in this photo (0..1), when the watcher followed it
+    photos: frames.map((f) => ({ t: f.t, blob: f.blob, key: !!f.key, ...(f.subjectBox ? { subjectBox: f.subjectBox, distanceM: f.distanceM, subject: true } : {}), ...(f.frameBox ? { frameBox: f.frameBox } : {}) })),
     keyPhoto: Math.max(0, frames.findIndex((f) => f.key)),
     vehicleType: '', plate: '', plateValid: false, color: '', notes: '',
     violation: 'wrong-side', status: 'new', synced: false,
