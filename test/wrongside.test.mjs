@@ -287,3 +287,65 @@ test('27 Nov 08:24 van: rear view, 3 jittery sightings, not flagged', () => {
   for (let i = 0; i < 8; i++) more.push(...tr2.update(i * 300, [{ ...sized('car', 20 - i * 2.2, -1.2, 1.7, 1.75), rear: true }], W, H, 57));
   assert.equal(more.length, 0, 'tail lamps on both sides: seen from behind');
 });
+
+// ---- 27 Nov 12:50 ride: 0 wrong-side alerts although the video shows many riders coming
+// the wrong way on the left. Causes: a scooter was first detected only 5-13 m away (the
+// watched crop squeezed into 300 px), and a slow rider (20 km/h) while we rode at 40 could
+// never pass the "smallest scooter" margin ----
+import { farRegion, dedupeTiles, headlampScore, looksLit } from '../public/js/wrongside-watch.js';
+import { survey, fieldRun } from './wrongside-field.mjs';
+
+const ridden = (d, lateral, i) => { // a scooter with its rider, as the detector sees it (rider merged half the time)
+  const b = box('motorcycle', d, lateral, { score: 0.5 });
+  return i % 2 ? [b, { class: 'person', score: 0.6, bbox: [b.bbox[0] + b.bbox[2] * 0.15, b.bbox[1] - b.bbox[3] * 0.1, b.bbox[2] * 0.7, b.bbox[3] * 0.6] }] : [b];
+};
+test('a slow wrong-side rider (20 km/h) is flagged while we ride at 40', () => {
+  const a = drive({ own: 40, closingKmh: 60, start: 30, make: (d, i) => ridden(d, -1.4, i) });
+  assert.equal(a.length, 1);
+  assert.equal(a[0].ridden, true);
+  assert.ok(a[0].oncomingKmh >= 12 && a[0].oncomingKmh <= 28, `own speed toward us ${a[0].oncomingKmh}`);
+});
+test('a scooter with its headlamp on (AHO) coming at 12 km/h is flagged; a parked, unlit one is not', () => {
+  const lit = drive({ own: 45, closingKmh: 57, start: 30, make: (d) => [{ ...box('motorcycle', d, -1.2), lit: true }] });
+  assert.equal(lit.length, 1); assert.equal(lit[0].headlamp, true);
+  const parked = drive({ own: 45, closingKmh: 45, start: 30, make: (d) => [{ ...sized('motorcycle', d, -1.8, 0.62, 1.1), lit: false }] });
+  assert.equal(parked.length, 0);
+});
+test('headlamp check: a compact bright blob in the middle = lit; a white panel all over = not', () => {
+  const img = (paint) => { const w = 40, h = 30, data = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const [r, g, b] = paint(x / w, y / h); data.set([r, g, b, 255], (y * w + x) * 4); }
+    return { data, width: w, height: h }; };
+  assert.ok(looksLit(headlampScore(img((fx, fy) => (Math.hypot(fx - 0.5, fy - 0.45) < 0.08 ? [255, 252, 240] : [90, 90, 95])))));
+  assert.ok(!looksLit(headlampScore(img(() => [245, 245, 245]))), 'white scooter in the sun');
+  assert.ok(!looksLit(headlampScore(img(() => [80, 80, 80]))), 'lamp off');
+});
+test('the far tile sits around the horizon on the rider side, inside the frame', () => {
+  const [x, y, w, h] = farRegion('left', 2160, 3840);
+  assert.ok(x >= 0 && x + w <= 2160 && y >= 0 && y + h <= 3840);
+  assert.ok(x + w / 2 < 1080, 'left of centre'); assert.ok(y < 0.42 * 3840 && y + h > 0.42 * 3840, 'spans the horizon');
+  const [, ly] = farRegion('left', 2160, 3840, 0.5); assert.ok(ly > y, 'follows a learned horizon');
+  assert.ok(farRegion('right', 2160, 3840)[0] > 1080 - w / 2);
+  assert.ok(w <= watchRegion('left', 2160, 3840)[2] * 0.75, 'finer than the main crop');
+});
+test('one vehicle found in both tiles stays one detection (the uncut box wins)', () => {
+  const A = [0, 0, 100, 100], B = [50, 0, 100, 100];
+  const d = dedupeTiles([{ class: 'motorcycle', score: 0.7, bbox: [98, 40, 10, 20], tile: A }, { class: 'motorcycle', score: 0.5, bbox: [97, 40, 11, 20], tile: B }],
+    (bx, tile) => bx[0] + bx[2] >= tile[0] + tile[2] - 1.5);
+  assert.equal(d.length, 1); assert.equal(d[0].tile, B); assert.equal(d[0].clipped, false);
+});
+test('vehicles that came close on our side but were not flagged are kept with the reason', () => {
+  const tr = createWrongSideTracker({ fovDeg: FOV });
+  drive({ own: 30, closingKmh: 30, start: 30, tracker: tr, make: (d) => [sized('motorcycle', d, -1.8, 0.62, 1.1)] }); // parked
+  for (let i = 0; i < 8; i++) tr.update(40000 + i * 250, [], W, H, 30); // it leaves the picture
+  assert.equal(tr.nearMisses.length, 1);
+  assert.equal(tr.nearMisses[0].reason, 'not clearly oncoming');
+  assert.ok(tr.nearMisses[0].minD <= 6);
+});
+test('field model: the far tile and the ridden/headlamp rules catch most wrong-side riders, few false alerts', () => {
+  const vw = 2160, vh = 3840;
+  const before = survey({ checksPerS: 3 }); // main crop only (as on 27 Nov)
+  const now = survey({ checksPerS: 3, tiles: [watchRegion('left', vw, vh), farRegion('left', vw, vh)] });
+  assert.ok(before.caught <= 10, `main crop only caught ${before.caught}/${before.total}`);
+  assert.ok(now.caught >= 75, `caught ${now.caught}/${now.total}`);
+  assert.ok(now.falseAlerts <= 10, `false alerts ${now.falseAlerts}/${now.negatives}: ${now.fps.join(' ')}`);
+});

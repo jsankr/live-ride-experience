@@ -49,3 +49,12 @@ test('bulk delete selects by day and time of day, skipping locked clips unless a
   assert.deepEqual(clipsInRange(clips, { from: DAY_PARTS.night[0], to: DAY_PARTS.night[1] }), ['d', 'e'], 'night wraps past midnight');
   assert.deepEqual(clipsInRange(clips, { day: '2026-11-26', from: '07:30', to: '09:00' }), ['f']);
 });
+
+import { toSrt, srtToVtt } from '../public/js/dashcam.js';
+test('the stamp is written as one subtitle per second, ending with the clip', () => {
+  const srt = toSrt([{ t: 0, lines: ['2026-11-27 12:50:00 · 32 km/h', '12.73814, 80.00633 · RideLens'] }, { t: 1000, lines: ['2026-11-27 12:50:01 · 33 km/h', 'GPS — · RideLens'] }], 1600);
+  assert.equal(srt, '1\n00:00:00,000 --> 00:00:01,000\n2026-11-27 12:50:00 · 32 km/h\n12.73814, 80.00633 · RideLens\n\n2\n00:00:01,000 --> 00:00:01,600\n2026-11-27 12:50:01 · 33 km/h\nGPS — · RideLens\n');
+  const vtt = srtToVtt(srt);
+  assert.ok(vtt.startsWith('WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n'));
+  assert.ok(!/^\d+$/m.test(vtt.split('\n\n').slice(1).join('\n').split('\n')[0]));
+});

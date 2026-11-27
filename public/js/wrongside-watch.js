@@ -54,8 +54,22 @@ export function mergeRiders(detections) {
   for (const p of detections.filter((d) => d.class === 'person')) {
     const pcx = p.bbox[0] + p.bbox[2] / 2;
     const bike = out.find((d) => WHEELS.has(d.class) && overlap(d.bbox, p.bbox) > 0.25 && pcx >= d.bbox[0] && pcx <= d.bbox[0] + d.bbox[2]);
-    if (bike) { bike.bbox = union(bike.bbox, p.bbox); bike.score = Math.max(bike.score, p.score); bike.withRider = true; }
+    if (bike) { bike.bbox = union(bike.bbox, p.bbox); bike.score = Math.max(bike.score, p.score); bike.withRider = true; bike.clipped = bike.clipped || p.clipped; }
     else out.push({ ...p });
+  }
+  return out;
+}
+
+// The same vehicle found in two overlapping tiles is one vehicle: keep the box that is not
+// cut off by its tile's edge (or the higher score), so it does not start a second track.
+export function dedupeTiles(dets, clippedOf = () => false) {
+  const out = [];
+  for (const d of [...dets].sort((a, b) => b.score - a.score)) {
+    const c = clippedOf(d.bbox, d.tile);
+    const same = out.find((o) => GROUP[o.class] === GROUP[d.class] && o.tile !== d.tile && overlap(o.bbox, d.bbox) > 0.5);
+    if (!same) { out.push({ ...d, clipped: d.clipped ?? c }); continue; }
+    if (same.clipped && !c) Object.assign(same, d, { clipped: false });
+    same.withRider = same.withRider || d.withRider;
   }
   return out;
 }
@@ -79,6 +93,22 @@ export function tailLightScore({ data, width, height }) {
   return { left: f('left'), right: f('right'), middle: f('middle') };
 }
 export const looksLikeRear = (s) => s.left >= 0.012 && s.right >= 0.012 && s.middle < 0.6 * Math.min(s.left, s.right) && s.middle < 0.15;
+
+// Headlamp check on a small RGBA sample of a two-wheeler box ({ data, width, height }).
+// Indian two-wheelers made since April 2017 keep the headlamp on whenever the engine runs
+// (AHO), so one coming at us shows a small, near-white blob in the middle of its front; a
+// parked one does not. A white body panel in the sun is bright all over, so the blob must be
+// compact and brighter than the rest of the box.
+export function headlampScore({ data, width, height }) {
+  let cB = 0, cN = 0, oB = 0, oN = 0;
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const i = (y * width + x) * 4, bright = Math.min(data[i], data[i + 1], data[i + 2]) >= 232;
+    const fx = x / width, fy = y / height;
+    if (fx >= 0.3 && fx < 0.7 && fy >= 0.25 && fy < 0.75) { cN++; if (bright) cB++; } else { oN++; if (bright) oB++; }
+  }
+  return { centre: cB / (cN || 1), outer: oB / (oN || 1) };
+}
+export const looksLit = (s) => s.centre >= 0.015 && s.centre <= 0.3 && s.centre > 2.5 * s.outer;
 
 function fit(points, noiseFrac = 0) { // distance over time (seconds): median-of-slopes, and how well a straight line explains it
   const n = points.length;
@@ -118,7 +148,7 @@ export function groundSize(obs, sizeOf, camHeightM) {
   // size and make parked vehicles look oncoming. The reduced-major-axis slope does not
   // flatten; noise in the box bottom steepens it instead, which errs toward "parked".
   const b = Math.sqrt(syy / sxx);
-  return { sizeM: camHeightM / b, r2: (sxy * sxy) / (sxx * syy) };
+  return { sizeM: camHeightM / b, r2: (sxy * sxy) / (sxx * syy), horizonY: my - b * mx };
 }
 
 export function createWrongSideTracker(options = {}) {
@@ -147,6 +177,14 @@ export function createWrongSideTracker(options = {}) {
     camHeightErr: 0.08,    // how wrong that height may be
     minGroundR2: 0.95,     // tyre-contact line must fit this well to trust the measured size    // typical box-size error on a moving bike (vibration + detector jitter)
     requireOwnSpeed: true, // without GPS speed we cannot tell oncoming from slower traffic
+    riddenSizeK: 1.0,      // a ridden two-wheeler: its class's typical width...
+    riddenMinKmh: 10,      // ...coming at us at least this fast...
+    riddenOwnVelocityFrac: 0.22, // ...and this fraction of our speed (a person on a parked scooter at 60 km/h stays below)
+    // headlamp on (AHO): it is running and facing us, the parked-scooter doubt is gone
+    litMinKmh: 8,
+    litOwnVelocityFrac: 0.15,
+    litConfidenceZ: 0.4,
+    confirmChecks: 1,      // consecutive checks that must agree before an alert
     minScore: MIN_SCORE,
     ...options,
   };
@@ -162,6 +200,25 @@ export function createWrongSideTracker(options = {}) {
     const med = [...carHeights].sort((a, b) => a - b)[carHeights.length >> 1];
     camHeight = Math.min(1.6, Math.max(0.7, camHeight * (REAL_HEIGHT_M.car / med)));
     carHeights.length = 0;
+  };
+  // where the horizon sits (fraction of frame height), learned from vehicles whose size was
+  // measured from the road: the far tile is centred on it
+  const horizons = [];
+  let horizonFrac = null, frameHNow = 0;
+  const noteHorizon = (gs) => {
+    if (gs.horizonY == null || !frameHNow) return;
+    horizons.push(gs.horizonY / frameHNow); if (horizons.length > 30) horizons.shift();
+    if (horizons.length >= 5) horizonFrac = [...horizons].sort((a, b) => a - b)[horizons.length >> 1];
+  };
+  // vehicles that were on our side, close, and NOT flagged: kept so a ride report can show why
+  const nearMisses = [];
+  const noteEnded = (tr) => {
+    const dcs = tr.decision;
+    if (tr.fired || !dcs || dcs.reason === 'other lane' || dcs.reason === 'flagged') return;
+    const minD = Math.min(...tr.obs.map((o) => o.d ?? Infinity));
+    if (!(minD <= cfg.triggerDistanceM)) return;
+    nearMisses.push({ ...dcs, minD: +minD.toFixed(1) });
+    if (nearMisses.length > 40) nearMisses.shift();
   };
   let nextId = 1;
   const tanHalf = () => Math.tan((cfg.fovDeg * Math.PI) / 360);
@@ -185,12 +242,13 @@ export function createWrongSideTracker(options = {}) {
   // edge is cut off, so its size (and the distance from it) is wrong.
   function update(tMs, detections, frameW, frameH, ownSpeedKmh = null, region = [0, 0, frameW, frameH]) {
     const edge = 0.015 * frameW;
-    const clippedBox = ([x, y, w, h]) => x <= region[0] + edge || x + w >= region[0] + region[2] - edge
-      || y <= region[1] + edge || y + h >= region[1] + region[3] - edge;
+    // a detection may carry the tile it was found in (several crops per check): its own edges
+    const clippedBox = ([x, y, w, h], rg = region) => x <= rg[0] + edge || x + w >= rg[0] + rg[2] - edge
+      || y <= rg[1] + edge || y + h >= rg[1] + rg[3] - edge;
     const t = tMs / 1000;
     if (ownSpeedKmh != null) speeds.push([t, ownSpeedKmh]);
     while (speeds.length && t - speeds[0][0] > 8) speeds.shift();
-    const vehicles = mergeRiders(detections.filter((d) => GROUP[d.class] && scoreOk(d)));
+    const vehicles = dedupeTiles(mergeRiders(detections.filter((d) => GROUP[d.class] && scoreOk(d))), clippedBox);
     // Associate detections with tracks. Box overlap alone failed for exactly the vehicles we
     // want: a small rider coming at us on the left slides sideways by more than its own width
     // between checks, so every sighting started a new track and none reached 3 sightings.
@@ -227,7 +285,7 @@ export function createWrongSideTracker(options = {}) {
       takenDet.add(pr.di); takenTrack.add(pr.id); matchOf.set(pr.di, pr.id);
     }
     vehicles.forEach((det, di) => {
-      const obs = { t, box: det.bbox, cls: det.class, score: det.score, clipped: clippedBox(det.bbox), rear: det.rear ?? null };
+      const obs = { t, box: det.bbox, cls: det.class, score: det.score, clipped: det.clipped ?? clippedBox(det.bbox, det.tile), rear: det.rear ?? null, rider: !!det.withRider, lit: det.lit ?? null };
       const id = matchOf.get(di);
       if (id != null) {
         const tr = tracks.get(id);
@@ -238,10 +296,12 @@ export function createWrongSideTracker(options = {}) {
         tracks.set(nid, { id: nid, group: GROUP[det.class], obs: [obs], last: obs, fired: false });
       }
     });
-    for (const [id, tr] of tracks) if (t - tr.last.t > 1.5) tracks.delete(id);
+    frameHNow = frameH;
+    for (const [id, tr] of tracks) if (t - tr.last.t > 1.5) { noteEnded(tr); tracks.delete(id); }
     for (const tr of tracks.values()) { // what the overlay and status show
       tr.cls = trackClass(tr);
       tr.last.d = distanceOf(tr.last.box, tr.group === '4w' ? tr.cls : tr.last.cls, tr.group, frameW);
+      for (const o of tr.obs) o.d ??= distanceOf(o.box, tr.group === '4w' ? tr.cls : o.cls, tr.group, frameW);
       tr.last.lateral = ((tr.last.box[0] + tr.last.box[2] / 2) / frameW - 0.5) * 2 * tr.last.d * tanHalf();
     }
 
@@ -252,14 +312,14 @@ export function createWrongSideTracker(options = {}) {
       if (tr.fired || tr.last.clipped) continue;
       const cls = tr.cls;
       const good = tr.obs.filter((o) => !o.clipped).map((o) => ({ ...o, d: distanceOf(o.box, tr.group === '4w' ? cls : o.cls, tr.group, frameW) }));
-      if (good.length < cfg.minSightings) continue;
+      if (good.length < cfg.minSightings) { tr.decision = { t, cls, sightings: good.length, reason: 'too few sightings' }; continue; }
       const span = good[good.length - 1].t - good[0].t;
-      if (span < cfg.minSpanS) continue;
+      if (span < cfg.minSpanS) { tr.decision = { t, cls, sightings: good.length, reason: 'seen too briefly' }; continue; }
       const { slope, r2, se } = fit(good, cfg.boxNoiseFrac);
-      if (r2 < cfg.minFitR2) continue;
+      if (r2 < cfg.minFitR2) { tr.decision = { t, cls, sightings: good.length, reason: 'unsteady approach' }; continue; }
       if (tr.group === '4w') { // tail lamps on both sides: we are looking at its back
         const checked = tr.obs.filter((o) => o.rear != null), rear = checked.filter((o) => o.rear).length;
-        if (checked.length && rear >= Math.max(1, checked.length / 2)) { tr.vetoed = 'rear lamps'; continue; }
+        if (checked.length && rear >= Math.max(1, checked.length / 2)) { tr.vetoed = 'rear lamps'; tr.decision = { t, cls, sightings: good.length, reason: 'tail lamps (seen from behind)' }; continue; }
       }
       const riderOnly = tr.group === '2w' && !tr.obs.some((o) => WHEELS.has(o.cls));
       const closingKmh = -slope * 3.6;
@@ -275,7 +335,16 @@ export function createWrongSideTracker(options = {}) {
       const sizePx = (o) => (tr.group === '4w' ? o.box[3] : o.box[2]);
       const gs = groundSize(good, sizePx, camHeight);
       const measured = gs && gs.r2 >= cfg.minGroundR2 && gs.sizeM > (MIN_SIZE_M[cls] ?? 0) * 0.6 && gs.sizeM < prior * 2.5;
-      const sizeK = measured ? (gs.sizeM / prior) * (1 - cfg.camHeightErr) : (MIN_SIZE_M[cls] ?? prior) / prior;
+      if (measured) noteHorizon(gs);
+      // A two-wheeler seen WITH its rider on it in most sightings is being ridden: parked
+      // scooters at the kerb are mostly riderless. Assuming the smallest scooter for those
+      // (×0.8) meant a rider coming at us at 20 km/h while we rode at 40 was never flagged
+      // (27 Nov 12:50 ride: 0 alerts). Ridden: the class's typical size and a smaller margin.
+      const ridden = tr.group === '2w' && !riderOnly && tr.obs.filter((o) => o.rider).length >= Math.max(2, tr.obs.length * 0.4);
+      // headlamp on, seen in at least 2 checks: its engine runs and we see its front
+      const lit = tr.group === '2w' && tr.obs.filter((o) => o.lit).length >= 2;
+      const easy = lit || ridden; // evidence it is moving, not parked
+      const sizeK = measured ? (gs.sizeM / prior) * (1 - (lit ? 0 : cfg.camHeightErr)) : easy ? cfg.riddenSizeK : (MIN_SIZE_M[cls] ?? prior) / prior;
       if (measured && cls === 'car') carHeights.push(gs.sizeM);
       const ownVelocityMinKmh = closingKmh * sizeK - ownMax; // the least it can be: smallest size, highest own speed
       const last = good[good.length - 1];
@@ -284,10 +353,17 @@ export function createWrongSideTracker(options = {}) {
       const towardOncoming = cfg.keep === 'left' ? lateral : -lateral;
       const inOurLane = towardOncoming <= cfg.sideEdgeM;
       // with the size measured, the size error is already in sizeK; keep a small margin only
-      const frac = measured ? cfg.measuredOwnVelocityFrac : cfg.minOwnVelocityFrac;
-      const needed = Math.max(cfg.minOwnVelocityKmh + (ownSpeedKmh == null ? 7 : 0) + (riderOnly ? cfg.riderOnlyExtraKmh : 0), frac * ownMax);
-      const sure = ownVelocityMinKmh - cfg.confidenceZ * se * 3.6 * sizeK; // speed toward us we are fairly sure of
-      if (near && inOurLane && sure >= needed && ownVelocityKmh <= cfg.maxOwnVelocityKmh) {
+      const frac = lit ? cfg.litOwnVelocityFrac : measured ? cfg.measuredOwnVelocityFrac : ridden ? cfg.riddenOwnVelocityFrac : cfg.minOwnVelocityFrac;
+      const needed = Math.max((lit ? cfg.litMinKmh : ridden ? cfg.riddenMinKmh : cfg.minOwnVelocityKmh) + (ownSpeedKmh == null ? 7 : 0) + (riderOnly ? cfg.riderOnlyExtraKmh : 0), frac * ownMax);
+      const sure = ownVelocityMinKmh - (lit ? cfg.litConfidenceZ : cfg.confidenceZ) * se * 3.6 * sizeK; // speed toward us we are fairly sure of
+      // what decided, for the ride's diagnostics (why a vehicle on our side was NOT flagged)
+      tr.decision = { t, cls, sightings: good.length, d: +last.d.toFixed(1), lateralM: +towardOncoming.toFixed(1), ownKmh: Math.round(ownMax),
+        closingKmh: Math.round(closingKmh), sureKmh: Math.round(sure), neededKmh: Math.round(needed), ridden, lit, measured: !!measured,
+        reason: !inOurLane ? 'other lane' : !near ? (last.d > cfg.triggerDistanceM ? 'still far' : 'too close') : sure < needed ? 'not clearly oncoming' : ownVelocityKmh > cfg.maxOwnVelocityKmh ? 'implausible speed' : 'flagged' };
+      const pass = near && inOurLane && sure >= needed && ownVelocityKmh <= cfg.maxOwnVelocityKmh;
+      // must hold on consecutive checks: one lucky fit on jittery boxes is not enough
+      tr.passes = pass ? (tr.passes || 0) + 1 : 0;
+      if (pass && tr.passes >= cfg.confirmChecks) {
         tr.fired = true;
         alerts.push({
           trackId: tr.id, vehicleClass: cls, type: LABELS[cls], category: WHEEL_CATEGORY[cls], box: tr.last.box,
@@ -296,7 +372,7 @@ export function createWrongSideTracker(options = {}) {
           closingKmh: Math.round(closingKmh), oncomingKmh: Math.round(ownVelocityKmh),
           ownSpeedKmh: ownSpeedKmh == null ? null : Math.round(ownSpeedKmh),
           score: +Math.max(...tr.obs.map((o) => o.score)).toFixed(2), sightings: good.length,
-          fitR2: +r2.toFixed(2), spanS: +span.toFixed(1), riderOnly, uncertaintyKmh: Math.round(se * 3.6),
+          fitR2: +r2.toFixed(2), spanS: +span.toFixed(1), riderOnly, ridden, headlamp: lit, uncertaintyKmh: Math.round(se * 3.6),
           // it closes faster than we move, so it is driving toward us: we should see its front
           direction: 'toward you', view: 'front',
         });
@@ -305,7 +381,8 @@ export function createWrongSideTracker(options = {}) {
     return alerts;
   }
 
-  return { update, get tracks() { return [...tracks.values()]; }, config: cfg, get camHeightM() { return camHeight; } };
+  return { update, get tracks() { return [...tracks.values()]; }, config: cfg, get camHeightM() { return camHeight; },
+    get horizonFrac() { return horizonFrac; }, get nearMisses() { return nearMisses; } };
 }
 
 // ---------- browser loop ----------
@@ -320,6 +397,20 @@ export function createWrongSideTracker(options = {}) {
 export function watchRegion(keep, vw, vh) {
   const w = vw * 0.62, x = keep === 'left' ? 0 : vw - w;
   return [x, vh * 0.18, w, Math.min(vh * 0.7, w * 1.3)];
+}
+
+// Far tile: a zoomed view of the road around the horizon on the rider's side, where a
+// wrong-side rider first appears. The main crop squeezes ~1300 px into the detector's
+// 300 px, so a scooter was found only 5-13 m away: too late for 4 sightings at a closing
+// speed of 60 km/h. This tile is ~2× finer and finds it at ~25-40 m. horizonFrac: where the
+// horizon sits in the frame (learned from tracks; 0.42 until then).
+export function farRegion(keep, vw, vh, horizonFrac = null) {
+  const side = Math.min(vw, vh) * 0.42;
+  const cx = keep === 'left' ? vw * 0.4 : vw * 0.6;
+  const hy = (horizonFrac ?? 0.42) * vh;
+  const x = Math.max(0, Math.min(vw - side, cx - side / 2));
+  const y = Math.max(0, Math.min(vh - side, hy - side * 0.45));
+  return [x, y, side, side];
 }
 
 // How long to wait before the next check (ms). Slow when stopped or when nothing is on
@@ -373,34 +464,37 @@ export function startAutoWatch({ video, overlay, loadDetector, getOwnSpeedKmh, k
   let stopped = false, frames = 0, lastStatus = 0, lastFocus = 0;
   const tracker = createWrongSideTracker({ keep });
   const follower = createSubjectFollower();
-  const canvas = document.createElement('canvas');
-  const hi = document.createElement('canvas'); // the full-resolution frame of this check
+  const tileCanvas = [document.createElement('canvas'), document.createElement('canvas')];
+  const hi = document.createElement('canvas'); // the full-resolution frame of this check (only while a vehicle is near)
   const hiCtx = hi.getContext('2d', { willReadFrequently: true });
   const lamp = document.createElement('canvas'); lamp.width = 40; lamp.height = 30;
   const lampCtx = lamp.getContext('2d', { willReadFrequently: true });
   let detector = null;
   loadDetector().then((d) => { detector = d; }).catch((e) => onStatus?.({ error: `Vehicle detector unavailable: ${e.message}` }));
   const started = performance.now();
+  // ride diagnostics: how often the road was checked, how long each check took, what was seen
+  const stats = { checks: 0, inferMsSum: 0, maxGapMs: 0, lastCheck: null, alerts: 0, vehiclesSeen: 0, lastIds: new Set() };
 
   const encode = (src, [x, y, w, h], maxSide, quality) => {
-    const s = Math.min(1, maxSide / Math.max(w, h));
-    const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w * s)); c.height = Math.max(1, Math.round(h * s));
+    const sc = Math.min(1, maxSide / Math.max(w, h));
+    const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w * sc)); c.height = Math.max(1, Math.round(h * sc));
     const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(src, x, y, w, h, 0, 0, c.width, c.height);
     return new Promise((r) => c.toBlob(r, 'image/jpeg', quality));
   };
   // a sensor-resolution crop around the vehicle, from the SAME frame its box came from
-  async function shot(box, k, t, d) {
+  async function shot(src, box, k, t, d) {
     const vb = box.map((v) => v / k); // detector frame → video pixels
-    const crop = subjectCrop(vb, hi.width, hi.height);
-    const blob = await encode(hi, crop, 1600, 0.92);
+    const crop = subjectCrop(vb, src.width || src.videoWidth, src.height || src.videoHeight);
+    const sw = src.width || src.videoWidth, sh = src.height || src.videoHeight;
+    const blob = await encode(src, crop, 1600, 0.92);
     return blob && { blob, t: t * 1000, areaPx: vb[2] * vb[3], distanceM: d, subject: true,
       subjectBox: [(vb[0] - crop[0]) / crop[2], (vb[1] - crop[1]) / crop[3], vb[2] / crop[2], vb[3] / crop[3]].map((v) => +v.toFixed(4)),
-      frameBox: [vb[0] / hi.width, vb[1] / hi.height, vb[2] / hi.width, vb[3] / hi.height].map((v) => +v.toFixed(4)) };
+      frameBox: [vb[0] / sw, vb[1] / sh, vb[2] / sw, vb[3] / sh].map((v) => +v.toFixed(4)) };
   }
-  const focus = (box, k, t) => {
+  const focus = (box, k, t, vw, vh) => {
     if (!focusOn || t - lastFocus < 0.4) return;
     lastFocus = t;
-    focusOn((box[0] + box[2] / 2) / k / hi.width, (box[1] + box[3] * 0.6) / k / hi.height); // a little low: the plate
+    focusOn((box[0] + box[2] / 2) / k / vw, (box[1] + box[3] * 0.6) / k / vh); // a little low: the plate
   };
 
   let lastInferMs = 0, active = false;
@@ -411,36 +505,58 @@ export function startAutoWatch({ video, overlay, loadDetector, getOwnSpeedKmh, k
     try {
       if (!detector || !video.videoWidth || document.hidden || isPaused()) return; // paused while the camera is zoomed for a manual capture
       const vw = video.videoWidth, vh = video.videoHeight;
-      // one snapshot per check: detection, tail lamps and evidence all come from it, so the
-      // saved photo is exactly the moment the box was measured
-      if (hi.width !== vw || hi.height !== vh) { hi.width = vw; hi.height = vh; }
-      hiCtx.drawImage(video, 0, 0, vw, vh);
-      const [rx, ry, rw, rh] = watchRegion(keep, vw, vh);
-      const k = 384 / Math.max(rw, rh); // the detector resizes to 300 px anyway: feeding more only costs time
-      canvas.width = Math.round(rw * k); canvas.height = Math.round(rh * k);
-      canvas.getContext('2d').drawImage(hi, rx, ry, rw, rh, 0, 0, canvas.width, canvas.height);
-      const t0 = performance.now();
-      const raw = await detector.detect(canvas, 20, 0.25); // busy roads: 10 boxes left out the faint ones
-      lastInferMs = performance.now() - t0;
-      // back to full-frame coordinates (at scale k) so distance and lateral offset stay correct
+      const following = tracker.tracks.some((tr) => follower.has(tr.id));
+      // The full-resolution copy of the frame (~33 MB at 4K) is only needed for evidence and
+      // lamp checks while a vehicle is near or followed; copying it on every check starved the
+      // page on 27 Nov. Otherwise the tiles are drawn straight from the video.
+      const needHi = active || following;
+      if (needHi) { if (hi.width !== vw || hi.height !== vh) { hi.width = vw; hi.height = vh; } hiCtx.drawImage(video, 0, 0, vw, vh); }
+      const src = needHi ? hi : video;
+      const main = watchRegion(keep, vw, vh);
+      const own = getOwnSpeedKmh();
+      // the far tile finds wrong-side riders 25-40 m away; skipped while stopped (nothing closes fast)
+      const regions = own != null && own < 5 ? [main] : [main, farRegion(keep, vw, vh, tracker.horizonFrac)];
+      const k = 384 / Math.max(main[2], main[3]); // detector frame scale (the detector resizes to 300 px anyway)
       const fw = vw * k, fh = vh * k;
-      const preds = raw.map((p) => ({ ...p, bbox: [rx * k + p.bbox[0], ry * k + p.bbox[1], p.bbox[2], p.bbox[3]] }));
-      // tail-lamp check on cars, buses and trucks, sampled from the full-resolution frame
+      const preds = [];
+      const t0 = performance.now();
+      for (let i = 0; i < regions.length; i++) {
+        const [rx, ry, rw, rh] = regions[i];
+        const c = tileCanvas[i], kt = 384 / Math.max(rw, rh);
+        c.width = Math.round(rw * kt); c.height = Math.round(rh * kt);
+        c.getContext('2d').drawImage(src, rx, ry, rw, rh, 0, 0, c.width, c.height);
+        const raw = await detector.detect(c, 20, 0.25); // busy roads: 10 boxes left out the faint ones
+        const tile = [rx * k, ry * k, rw * k, rh * k];
+        // back to full-frame coordinates (at scale k) so distance and lateral offset stay correct
+        for (const p of raw) preds.push({ ...p, tile, bbox: [rx * k + (p.bbox[0] / kt) * k, ry * k + (p.bbox[1] / kt) * k, (p.bbox[2] / kt) * k, (p.bbox[3] / kt) * k] });
+      }
+      lastInferMs = performance.now() - t0;
+      // lamps, sampled at full resolution: tail lamps on cars, buses and trucks (seen from
+      // behind = going our way), headlamps on two-wheelers (running and facing us)
       for (const p of preds) {
-        if (!['car', 'bus', 'truck'].includes(p.class) || p.bbox[2] < 12) continue;
-        lampCtx.drawImage(hi, p.bbox[0] / k, p.bbox[1] / k, p.bbox[2] / k, p.bbox[3] / k, 0, 0, lamp.width, lamp.height);
-        p.rear = looksLikeRear(tailLightScore(lampCtx.getImageData(0, 0, lamp.width, lamp.height)));
+        const four = ['car', 'bus', 'truck'].includes(p.class), two = p.class === 'motorcycle';
+        if ((!four && !two) || p.bbox[2] / k < 24) continue;
+        const [bx, by, bw, bh] = p.bbox.map((v) => v / k);
+        lampCtx.drawImage(src, bx, by, bw, two ? bh * 0.75 : bh, 0, 0, lamp.width, lamp.height);
+        const px = lampCtx.getImageData(0, 0, lamp.width, lamp.height);
+        if (four) p.rear = looksLikeRear(tailLightScore(px)); else p.lit = looksLit(headlampScore(px));
       }
       frames++;
+      const nowMs = performance.now();
+      if (stats.lastCheck != null) stats.maxGapMs = Math.max(stats.maxGapMs, nowMs - stats.lastCheck);
+      stats.lastCheck = nowMs; stats.checks++; stats.inferMsSum += lastInferMs;
       // portrait streams see a narrower horizontal angle than landscape ones
       tracker.config.fovDeg = vw >= vh ? 64 : 48;
-      const own = getOwnSpeedKmh();
       const tNow = Date.now() / 1000;
-      const alerts = tracker.update(tNow * 1000, preds, fw, fh, own, [rx * k, ry * k, rw * k, rh * k]);
+      const alerts = tracker.update(tNow * 1000, preds, fw, fh, own, [main[0] * k, main[1] * k, main[2] * k, main[3] * k]);
+      for (const tr of tracker.tracks) if (!stats.lastIds.has(tr.id) && tr.obs.length >= 2) { stats.lastIds.add(tr.id); stats.vehiclesSeen++; }
+      if (stats.lastIds.size > 500) stats.lastIds = new Set([...stats.lastIds].slice(-200));
       drawOverlay(overlay, { width: fw, height: fh }, tracker.tracks, alerts, isDiscreet());
       active = tracker.tracks.some((tr) => tNow - tr.last.t < 2 && tr.last.d < 45);
       // a new wrong-side vehicle: tell the rider now, keep the scene, and start following it
       for (const a of alerts) {
+        stats.alerts++;
+        if (!needHi) { if (hi.width !== vw || hi.height !== vh) { hi.width = vw; hi.height = vh; } hiCtx.drawImage(video, 0, 0, vw, vh); }
         follower.start({ ...a, frameW: fw, frameH: fh }, tNow);
         follower.get(a.trackId).context = { blob: await encode(hi, [0, 0, vw, vh], 1920, 0.88), t: tNow * 1000, frameBox: [a.box[0] / fw, a.box[1] / fh, a.box[2] / fw, a.box[3] / fh] };
         onDetect?.({ ...a, frameW: fw, frameH: fh });
@@ -448,9 +564,9 @@ export function startAutoWatch({ video, overlay, loadDetector, getOwnSpeedKmh, k
       // every followed vehicle seen in this check: a full-resolution shot, focus on it
       for (const tr of tracker.tracks) {
         if (!follower.has(tr.id) || Math.abs(tr.last.t - tNow) > 1e-3 || tr.last.clipped) continue;
-        const sh = await shot(tr.last.box, k, tNow, +tr.last.d.toFixed(1));
+        const sh = await shot(needHi ? hi : video, tr.last.box, k, tNow, +tr.last.d.toFixed(1));
         if (sh) follower.add(tr.id, sh);
-        focus(tr.last.box, k, tNow);
+        focus(tr.last.box, k, tNow, vw, vh);
       }
       // done following (closest view passed): hand over the evidence; none is dropped
       for (const f of follower.due(tNow, tracker.tracks)) onAlert?.({ ...f.alert, shots: f.shots, context: f.context });
@@ -458,15 +574,23 @@ export function startAutoWatch({ video, overlay, loadDetector, getOwnSpeedKmh, k
       if (now - lastStatus > 1000) {
         lastStatus = now;
         const seen = tracker.tracks.filter((tr) => tNow - tr.last.t < 1);
-        onStatus?.({ fps: frames / ((now - started) / 1000), vehicles: seen.length, inferMs: Math.round(lastInferMs), active,
+        onStatus?.({ fps: frames / ((now - started) / 1000), vehicles: seen.length, inferMs: Math.round(lastInferMs), active, tiles: regions.length,
           tracks: seen.map((tr) => ({ cls: tr.cls, n: tr.obs.length, d: +tr.last.d.toFixed(1), lateral: +tr.last.lateral.toFixed(1), fired: tr.fired })) });
       }
       // the interval is start-to-start, so subtract the time this check already took
-      wait = Math.max(0, nextInterval({ ownSpeedKmh: own, active: active || tracker.tracks.some((tr) => follower.has(tr.id)), lastInferMs }) - (performance.now() - cycleStart));
+      wait = Math.max(0, nextInterval({ ownSpeedKmh: own, active: active || following, lastInferMs }) - (performance.now() - cycleStart));
     } catch (e) { onStatus?.({ error: e.message }); } finally { if (!stopped) setTimeout(tick, wait); }
   }
   tick();
-  return () => { stopped = true; overlay?.getContext('2d').clearRect(0, 0, overlay.width, overlay.height); };
+  const stop = () => { stopped = true; overlay?.getContext('2d').clearRect(0, 0, overlay.width, overlay.height); };
+  // summary for the ride report: did the watcher get to look often enough, and what it passed on
+  stop.diagnostics = () => ({
+    minutes: +((performance.now() - started) / 60000).toFixed(1), checks: stats.checks,
+    checksPerS: +(stats.checks / Math.max(1, (performance.now() - started) / 1000)).toFixed(2),
+    avgInferMs: stats.checks ? Math.round(stats.inferMsSum / stats.checks) : null, maxGapMs: Math.round(stats.maxGapMs),
+    vehiclesSeen: stats.vehiclesSeen, alerts: stats.alerts, nearMisses: tracker.nearMisses.slice(-25),
+  });
+  return stop;
 }
 
 function drawOverlay(overlay, frame, tracks, alerts, discreet = false) {

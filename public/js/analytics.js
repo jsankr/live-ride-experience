@@ -34,6 +34,12 @@ export const DEFAULTS = {
   potholeDipWindowMs: 200,  // ...within this long before the slam
   bumpDecelKmh: 4,          // speed breaker: compression first, after slowing by this much...
   bumpSlowKmh: 20,          // ...or when already this slow
+  bumpMinMs: 60,            // ...and the compression lasted this long (80 ms missed real breakers at 60 samples/s)
+  bumpClimbG: 0.15,         // breaker: the front wheel's climb before the crest, at least this (g, 100 ms mean)...
+  bumpClimbMs: 450,         // ...within this long before the crest unload
+  bumpMaxKmh: 30,           // ...and taken no faster than this (nobody crosses a breaker at 55)
+  smallBumpRearK: 0.5,      // small bump taken at speed: rear wheel's hit at least this × the front's...
+  smallBumpProminence: 6,   // ...and the front hit this many × the road's background vibration
   potholeMinSpeed: 3,       // m/s
   impactMinGapM: 10,        // at most one pothole/bump per this distance
   wheelbaseM: 1.45,         // front then rear wheel hit the same spot this far apart (T120 ≈ 1.45 m)
@@ -118,7 +124,7 @@ export function createAnalyzer(options = {}) {
   const cfg = { ...DEFAULTS, ...options };
   const speedFilter = createSpeedFilter();
   const s = {
-    startT: null, lastImuT: null,
+    startT: null, lastImuT: null, rawImuTs: [],
     gravity: null, up: null,
     fwdAcc: { x: 0, y: 0, z: 0 }, fwdWeight: 0, fwd: null,
     longRaw: 0, long: 0, lat: 0, prevLong: null, jerk: 0,
@@ -175,7 +181,22 @@ export function createAnalyzer(options = {}) {
   }
 
   // ---------- IMU ----------
-  function pushImu(t, acc, gyro) {
+  // A busy page (camera + 4K dashcam) gets its motion events in bursts: on the 27 Nov 12:50
+  // ride ~8 samples at a time shared one timestamp, 7 deliveries a second. Impact timing (the
+  // rear wheel's repeat, how long a breaker compresses) then collapses to zero. The sensor
+  // itself kept its rate (60/s), so a burst is spread back out at that rate.
+  function sensorTime(raw) {
+    const rb = s.rawImuTs;
+    rb.push(raw);
+    while (rb.length > 2 && raw - rb[0] > 2000) rb.shift();
+    const iv = rb.length > 10 && raw > rb[0] ? clamp((raw - rb[0]) / (rb.length - 1), 4, 50) : 16.7;
+    s.imuN = (s.imuN || 0) + 1;
+    if (s.lastImuT != null && raw - s.lastImuT < 0.5 * iv) { s.imuSpread = (s.imuSpread || 0) + 1; return Math.min(s.lastImuT + iv, raw + 1000); }
+    return raw;
+  }
+
+  function pushImu(tRaw, acc, gyro) {
+    const t = sensorTime(tRaw);
     if (s.startT == null) s.startT = t;
     const dt = s.lastImuT == null ? 0.02 : clamp((t - s.lastImuT) / 1000, 0.001, 0.2);
     s.lastImuT = t;
@@ -268,6 +289,7 @@ export function createAnalyzer(options = {}) {
     s.roughRms = Math.sqrt(Math.max(0, s.roughSqSum) / Math.max(1, s.vertBuf.length));
 
     // 6. potholes & bumps
+    cfg.onVert?.(t, vert, s.speed);
     detectImpact(t, vert, dt);
     detectCrash(t, lin);
     // 7. braking / acceleration
@@ -331,7 +353,7 @@ export function createAnalyzer(options = {}) {
     const rearMs = (cfg.wheelbaseM / Math.max(s.speed, 1)) * 1000;
     s.pendingImpact = {
       t, bg, rearMs, deadline: t + Math.min(1500, Math.max(400, rearMs * 1.35 + 250)),
-      samples: s.vertBuf.filter((b) => t - b.t <= 300).map((b) => ({ t: b.t, v: b.v })),
+      samples: s.vertBuf.filter((b) => t - b.t <= 700).map((b) => ({ t: b.t, v: b.v })),
     };
   }
 
@@ -347,7 +369,7 @@ export function createAnalyzer(options = {}) {
 
   function classifyImpact(p) {
     const all = p.samples;
-    const smp = all.filter((x) => x.t <= p.t + 400); // the front-wheel hit
+    const smp = all.filter((x) => x.t >= p.t - 300 && x.t <= p.t + 400); // the front-wheel hit
     let iMin = 0, iMax = 0;
     smp.forEach((x, i) => { if (x.v < smp[iMin].v) iMin = i; if (x.v > smp[iMax].v) iMax = i; });
     const minV = smp[iMin].v, maxV = smp[iMax].v;
@@ -358,7 +380,8 @@ export function createAnalyzer(options = {}) {
     // did the rear wheel hit the same spot one wheelbase later? (random jolts don't repeat on cue)
     const tPeak = smp[iMax].t;
     const rear = all.filter((x) => x.t >= tPeak + 0.65 * p.rearMs && x.t <= tPeak + 1.35 * p.rearMs);
-    const rearHit = rear.length > 0 && Math.max(...rear.map((x) => Math.abs(x.v))) >= Math.max(0.3 * maxV, 2.5 * bg);
+    const rearPeak = rear.length ? Math.max(...rear.map((x) => Math.abs(x.v))) : 0;
+    const rearHit = rearPeak >= Math.max(0.3 * maxV, 2.5 * bg);
     const jolts = (s.jolts || []).filter((x) => p.t - x < cfg.roughWindowMs);
     const onRough = jolts.length >= cfg.roughCount - 1;
     // on a rough stretch an event must also stand out above the jolts this road keeps making
@@ -377,26 +400,46 @@ export function createAnalyzer(options = {}) {
     // come after the spike, so only the part before the peak counts as the drop
     // ...and only IMMEDIATELY before it (a wheel crosses a hole in tens of ms): an earlier dip is
     // fork dive from braking for a speed breaker, which made breakers look like potholes
-    let minBefore = 0;
-    for (let i = 0; i < iMax; i++) if (smp[iMax].t - smp[i].t <= cfg.potholeDipWindowMs) minBefore = Math.min(minBefore, smp[i].v);
+    let minBefore = 0, tDip = null;
+    for (let i = 0; i < iMax; i++) if (smp[iMax].t - smp[i].t <= cfg.potholeDipWindowMs && smp[i].v < minBefore) { minBefore = smp[i].v; tDip = smp[i].t; }
     const dipLevel = Math.max(cfg.potholeDipG * G, 2.5 * bg);
     const dip = -minBefore >= dipLevel;
-    cfg.onClassify?.({ t: p.t, minBeforeG: minBefore / G, maxG: maxV / G, bgG: bg / G, dip });
-    let kind = null;
-    if (dip) kind = 'pothole';
-    else {
-      // compression first: a speed breaker if the rider slowed for it (or was crawling) and the
-      // compression lasted (a ramp takes time to climb; a sharp ridge or rut does not)
-      let dur = 0;
-      for (let i = iMax; i >= 0 && smp[i].v > 0.4 * maxV; i--) dur = smp[iMax].t - smp[i].t;
-      for (let i = iMax; i < smp.length && smp[i].v > 0.4 * maxV; i++) dur += i > iMax ? smp[i].t - smp[i - 1].t : 0;
-      const before = speedKmhAgo(p.t, 8000, 1500);
-      const slowed = before != null && before - nowKmh >= cfg.bumpDecelKmh;
-      if ((slowed || nowKmh <= cfg.bumpSlowKmh) && dur >= 80) kind = 'bump';
+    // A speed breaker seen by the front wheel: it CLIMBS (a sustained compression), unloads over
+    // the crest, then lands. The crest's unload looks like a pothole's drop, so a ride on 27 Nov
+    // logged breakers as potholes. A pothole drops out of level road: nothing climbs first.
+    let climb = 0;
+    if (tDip != null) {
+      const pre = all.filter((x) => x.t >= tDip - cfg.bumpClimbMs && x.t <= tDip - 40);
+      for (let i = 0; i < pre.length; i++) {
+        let sum = 0, n = 0;
+        for (let j = i; j < pre.length && pre[j].t - pre[i].t <= 100; j++) { sum += pre[j].v; n++; }
+        if (n >= 3) climb = Math.max(climb, sum / n);
+      }
     }
+    const climbed = climb >= Math.max(cfg.bumpClimbG * G, bg);
+    // compression first: how long the compression lasted (a ramp takes time to climb; a sharp
+    // ridge or rut does not) and whether the rider slowed for it
+    let dur = 0;
+    for (let i = iMax; i >= 0 && smp[i].v > 0.4 * maxV; i--) dur = smp[iMax].t - smp[i].t;
+    for (let i = iMax; i < smp.length && smp[i].v > 0.4 * maxV; i++) dur += i > iMax ? smp[i].t - smp[i - 1].t : 0;
+    const before = speedKmhAgo(p.t, 8000, 1500);
+    const slowed = before != null && before - nowKmh >= cfg.bumpDecelKmh;
+    const slowFor = slowed || nowKmh <= cfg.bumpSlowKmh; // riders slow down for breakers
+    const quiet = jolts.length === 0; // no unexplained jolt in the last 10 s: not a rough patch starting
+    // the rear wheel's hit on a bump is a compression too (a random jolt is either sign)
+    const rearK = (rear.length ? Math.max(...rear.map((x) => x.v)) : 0) / Math.max(maxV, 1e-6);
+    let kind = null;
+    if (dip) kind = slowFor && climbed && nowKmh <= cfg.bumpMaxKmh && quiet ? 'bump' : 'pothole';
+    // (after recent jolts the old, stricter 80 ms: random jolts there are 30-60 ms long)
+    else if (slowFor && dur >= (quiet ? cfg.bumpMinMs : 80)) kind = 'bump';
+    // a small hump, raised joint or rumble strip taken without slowing: a clean compression on
+    // level road, repeated by the rear wheel about as hard (random jolts do not repeat on cue)
+    else if (quiet && rearHit && rearK >= cfg.smallBumpRearK && rearK <= 1 / cfg.smallBumpRearK && prominence >= cfg.smallBumpProminence) kind = 'bump';
+    const shape = kind;
     // on a rough stretch, the shape alone is not enough: require the rear-wheel repeat
     if (kind && !rearHit && (onRough || cfg.requireRearHit)) kind = null;
     if (kind === 'pothole' && onRough && maxV / G < 1.25 * joltMax) kind = null; // breakers have slow-down + duration instead
+    cfg.onClassify?.({ t: p.t, minBeforeG: minBefore / G, maxG: maxV / G, bgG: bg / G, dip, climbG: climb / G, shape, kind, rearHit, rearK, onRough, kmh: nowKmh, before, slowed, dur, p2pG, prominence });
     if (!kind) { unexplained(); return; }
     if (s.lastImpactPos && s.fix) {
       const d = haversine(s.lastImpactPos.lat, s.lastImpactPos.lon, s.fix.lat, s.fix.lon);
@@ -405,7 +448,8 @@ export function createAnalyzer(options = {}) {
     s.lastImpactT = p.t;
     if (s.fix) s.lastImpactPos = { lat: s.fix.lat, lon: s.fix.lon };
     const severity = p2pG < 1.2 ? 'minor' : p2pG < 2.0 ? 'moderate' : 'severe';
-    emit(kind, p.t, { severity, peakG: +(Math.max(-minV, maxV) / G).toFixed(2), p2pG: +p2pG.toFixed(2), prominence: +prominence.toFixed(1) });
+    // breaker: the rider slowed for it; small: a hump, joint or strip taken at speed
+    emit(kind, p.t, { severity, ...(kind === 'bump' ? { form: slowFor && nowKmh <= cfg.bumpMaxKmh ? 'breaker' : 'small' } : {}), peakG: +(Math.max(-minV, maxV) / G).toFixed(2), p2pG: +p2pG.toFixed(2), prominence: +prominence.toFixed(1) });
   }
 
   function closeRoughPatch(t) {
@@ -675,6 +719,9 @@ export function createAnalyzer(options = {}) {
       maxCoolant: s.maxCoolant,
       // vibration the phone sees while moving: a loose or undamped mount reads > ~1 m/s² even
       // on good roads, which hides real potholes among mount shake
+      // share of motion samples that arrived bunched (page too busy): high values mean the phone
+      // could not keep up with camera + dashcam + detector
+      imuBunchedPct: s.imuN ? Math.round((100 * (s.imuSpread || 0)) / s.imuN) : null,
       mountShake: (() => { const v = s.track.filter((p) => p.v > 15).map((p) => p.rough).sort((a, b) => a - b); return v.length > 20 ? +v[Math.floor(v.length * 0.25)].toFixed(2) : null; })(),
       avgRoughness: roughVals.length ? +(roughVals.reduce((a, b) => a + b, 0) / roughVals.length).toFixed(2) : null,
       scores: scores(),
