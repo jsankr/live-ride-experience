@@ -13,8 +13,13 @@ export function inTimeRange(t, { day = null, from = '00:00', to = '24:00' } = {}
 }
 
 // ---- wrong-side reports ----
+// Automatic reports made before the 27 Nov 2026 detector fix: that detector took slower
+// traffic we overtook for oncoming vehicles (and parked ones too). The new one always
+// records the least speed toward us it is sure of (oncomingMinKmh); the old one never did.
+export const fromOldDetector = (r) => !!r.auto && r.auto.oncomingMinKmh == null;
 export const REPORT_KINDS = [
   ['all', 'All reports'],
+  ['auto-old', 'Automatic, old detector (before the 27 Nov fix): mostly false'],
   ['auto-no-plate', 'Automatic, no plate read'],
   ['auto-no-vehicle', 'Automatic, no vehicle found in the photos'],
   ['unreviewed', 'Not reviewed yet (status new)'],
@@ -24,6 +29,7 @@ export const REPORT_KINDS = [
 export function reportMatches(r, kind) {
   switch (kind) {
     case 'all': return true;
+    case 'auto-old': return fromOldDetector(r);
     case 'auto-no-plate': return !!r.auto && !r.plate;
     case 'auto-no-vehicle': return !!r.auto && r.analysis?.status !== 'pending' && !r.analysis?.vehicle;
     case 'unreviewed': return (r.status || 'new') === 'new';

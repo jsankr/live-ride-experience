@@ -270,3 +270,20 @@ test('evidence crop leaves room above for the rider and stays inside the frame',
   const c = subjectCrop([0, 0, 50, 50], 1080, 1920);
   assert.equal(c[0], 0); assert.equal(c[1], 0);
 });
+
+// 27 Nov 08:24: a white van ahead going our way (tail lamps, rear plate in the photo) was
+// flagged by the old detector after 3 jittery sightings: "closed in at 124 km/h while you
+// rode at 57". The new rules must not flag it.
+test('27 Nov 08:24 van: rear view, 3 jittery sightings, not flagged', () => {
+  // its box swells unevenly as we close on it at 57 - 45 = 12 km/h, as on the ride
+  const seq = [[14, 1.0], [12.5, 1.12], [10.2, 1.25]];
+  const tr = createWrongSideTracker({ fovDeg: FOV });
+  const alerts = [];
+  seq.forEach(([d, k], i) => alerts.push(...tr.update(i * 330, [{ ...sized('car', d / k, -1.2, 1.7, 1.75), rear: true }], W, H, 57)));
+  assert.equal(alerts.length, 0, 'three sightings are not enough');
+  // and seen longer, with tail lamps, still not flagged however it seems to close
+  const tr2 = createWrongSideTracker({ fovDeg: FOV });
+  const more = [];
+  for (let i = 0; i < 8; i++) more.push(...tr2.update(i * 300, [{ ...sized('car', 20 - i * 2.2, -1.2, 1.7, 1.75), rear: true }], W, H, 57));
+  assert.equal(more.length, 0, 'tail lamps on both sides: seen from behind');
+});
