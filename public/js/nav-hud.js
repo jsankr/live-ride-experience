@@ -3,7 +3,7 @@
 // 132 px square, OSM breakers fetched once per route/area, traffic every 2 min with a key.
 import {
   nextManeuver, turnText, turnIcon, fmtAhead, createTurnPrompter, hazardsAhead, createHazardAlerter, hazardLabel,
-  osmBreakers, bboxAround, mergeSpots, probesAhead, tomtomFlow, worstTraffic, dist, bearing,
+  osmBreakers, bboxAround, mergeSpots, probesAhead, tomtomFlow, worstTraffic, dist, bearing, eventsAhead,
 } from './nav.js';
 import { startGps } from './sensors.js';
 
@@ -21,6 +21,7 @@ const ARROW = {
 };
 const svg = (d, stroke = 'currentColor') => `<svg viewBox="0 0 24 24"><path d="${d}" fill="none" stroke="${stroke}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const BUMP_ICON = svg('M2 18h20M5 18c2-6 12-6 14 0M12 6v4M9 3h6', '#111');
+const INCIDENT_ICON = svg('M12 3 2 20h20L12 3zM12 10v4M12 17h.01', '#fff');
 const POTHOLE_ICON = svg('M2 14h6l2 4h4l2-4h6M7 9h.01M12 7h.01M17 9h.01', '#111');
 
 export function createNavHud({ L, $, getTrip, getOwnSpots, settings, imperial, fmtHM, fmtDist }) {
@@ -31,6 +32,9 @@ export function createNavHud({ L, $, getTrip, getOwnSpots, settings, imperial, f
   let hazardShown = null, hazardTimer = null;
   const prompt = createTurnPrompter();
   const alert = createHazardAlerter();
+  // accidents, closures and road works need more warning than a pothole: ~20 s, never under 250 m
+  const incidentAlert = createHazardAlerter({ seconds: 20, minM: 250 });
+  const jamSaid = new Set();
 
   const say = (text, priority = false) => {
     if (!text || settings.navVoice === false || !window.speechSynthesis) return;
@@ -71,7 +75,7 @@ export function createNavHud({ L, $, getTrip, getOwnSpots, settings, imperial, f
   // OpenStreetMap breakers: along the trip's route (up to 60 km), else 2.5 km around us
   async function refreshOsm(route) {
     let key, bbox;
-    if (route && route.cum.at(-1) <= 60000) { key = `r${route.coords.length}|${route.coords[0]}`; bbox = bboxAround(route.coords.map(([lon, lat]) => ({ lat, lon })), 60); }
+    if (route && route.cum.at(-1) <= 60000) { bbox = bboxAround(route.coords.map(([lon, lat]) => ({ lat, lon })), 60); key = `r${bbox.map((v) => v.toFixed(2)).join(',')}`; } // stable across 3-minute re-routes
     else if (fix) { key = `a${(fix.lat * 50).toFixed(0)}|${(fix.lon * 50).toFixed(0)}`; bbox = bboxAround([fix], 2500); }
     if (!key || key === osmKey) return;
     osmKey = key;
@@ -79,7 +83,7 @@ export function createNavHud({ L, $, getTrip, getOwnSpots, settings, imperial, f
   }
 
   async function refreshTraffic(route, travelled) {
-    if (!settings.tomtomKey || !route || travelled == null || trafficBusy || Date.now() - trafficAt < 120000) return;
+    if (!settings.tomtomKey || !route || route.live || travelled == null || trafficBusy || Date.now() - trafficAt < 120000) return;
     trafficBusy = true; trafficAt = Date.now();
     try {
       const samples = [];
@@ -143,8 +147,20 @@ export function createNavHud({ L, $, getTrip, getOwnSpots, settings, imperial, f
     if (traffic && !traffic.error && travelled != null && traffic.at - travelled < -50) { traffic = null; trafficAt = 0; }
     refreshTraffic(route, travelled);
     const tr = $('hudTraffic');
-    const show = trip && !st.arrived && traffic;
-    tr.hidden = !show;
+    if (route?.live && travelled != null) { // TomTom route: the traffic events on it
+      const evs = eventsAhead(route, travelled);
+      const e = evs[0];
+      tr.hidden = !!st.arrived; tr.removeAttribute('data-level');
+      if (!e) { tr.dataset.level = 'free'; tr.textContent = 'Traffic clear to destination'; }
+      else {
+        tr.dataset.level = e.kind === 'jam' ? (e.magnitude >= 3 || e.speedKmh <= 10 ? 'jam' : e.magnitude >= 2 ? 'heavy' : 'slow') : 'heavy';
+        const where = e.inM <= 30 ? 'here' : `in ${fmtAhead(e.inM, imperial())}`;
+        tr.textContent = `${e.label} ${where}${e.speedKmh != null && e.kind === 'jam' ? ` · ${e.speedKmh} km/h` : ''}${e.delayS >= 60 ? ` · +${Math.round(e.delayS / 60)} min` : ''}${evs.length > 1 ? ` (+${evs.length - 1} more)` : ''}`;
+        if (e.kind === 'jam' && e.magnitude >= 2 && e.inM <= 1000 && !jamSaid.has(e.id)) { jamSaid.add(e.id); say(`Heavy traffic ahead, ${fmtAhead(e.inM, imperial())}`); }
+      }
+    }
+    const show = trip && !st.arrived && traffic && !route?.live;
+    if (!route?.live) tr.hidden = !show;
     if (show) {
       if (traffic.error) { tr.textContent = traffic.error; tr.removeAttribute('data-level'); }
       else {
@@ -155,20 +171,25 @@ export function createNavHud({ L, $, getTrip, getOwnSpots, settings, imperial, f
           : `${traffic.label} traffic in ${fmtAhead(inM, imperial())} · ${traffic.currentKmh} km/h`;
       }
     }
+    // accidents, closures, road works on the live route: earlier warning than potholes
+    const incidents = route?.live && travelled != null ? eventsAhead(route, travelled, 3000).filter((e) => e.alert)
+      .map((e) => ({ spot: { type: 'incident', label: e.label, lat: e.lat, lon: e.lon, kind: e.kind }, ahead: e.inM })) : [];
+    const inc = incidentAlert(incidents, speedKmh);
     // potholes and breakers coming up
-    const ahead = hazardsAhead(spots, { fix, heading, route, travelled, lookM: 800 });
-    const fresh = alert(ahead, speedKmh);
+    const ahead = [...hazardsAhead(spots, { fix, heading, route, travelled, lookM: 800 }), ...incidents].sort((a, b) => a.ahead - b.ahead);
+    const fresh = inc || alert(ahead.filter((h) => h.spot.type !== 'incident'), speedKmh);
     if (fresh) {
       hazardShown = fresh.spot;
       navigator.vibrate?.([120, 60, 120]);
       say(`${hazardLabel(fresh.spot)} ahead, ${fmtAhead(fresh.ahead, imperial())}`, true);
     }
-    const cur = hazardShown && ahead.find((h) => h.spot === hazardShown);
+    // same spot by type and place (incident entries are rebuilt on every update)
+    const cur = hazardShown && ahead.find((h) => h.spot.type === hazardShown.type && h.spot.lat === hazardShown.lat && h.spot.lon === hazardShown.lon);
     const box = $('hudHazard');
     if (cur) {
       box.hidden = false; box.className = `hud-hazard ${cur.spot.type}`;
-      $('hudHazardIcon').innerHTML = cur.spot.type === 'pothole' ? POTHOLE_ICON : BUMP_ICON;
-      $('hudHazardText').textContent = hazardLabel(cur.spot) + (cur.spot.source === 'osm' ? '' : cur.spot.rides > 1 ? ` · hit on ${cur.spot.rides} rides` : '');
+      $('hudHazardIcon').innerHTML = cur.spot.type === 'incident' ? INCIDENT_ICON : cur.spot.type === 'pothole' ? POTHOLE_ICON : BUMP_ICON;
+      $('hudHazardText').textContent = hazardLabel(cur.spot) + (cur.spot.type === 'incident' || cur.spot.source === 'osm' ? '' : cur.spot.rides > 1 ? ` · hit on ${cur.spot.rides} rides` : '');
       $('hudHazardDist').textContent = fmtAhead(cur.ahead, imperial());
       clearTimeout(hazardTimer); hazardTimer = setTimeout(() => { box.hidden = true; hazardShown = null; }, 6000);
     } else if (hazardShown) { box.hidden = true; hazardShown = null; } // passed it

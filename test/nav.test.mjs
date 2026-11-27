@@ -135,3 +135,66 @@ test('a pasted TomTom key is cleaned up however it was copied', () => {
   assert.ok(!looksLikeTomTomKey('my first api key'));
   assert.ok(!looksLikeTomTomKey(k.slice(0, 20)));
 });
+
+// ---- TomTom Orbis routing (real response: Chennai Central -> Adyar, 27 Nov 2026 12:17 IST) ----
+import { readFileSync } from 'node:fs';
+import { parseTomTomRoute, maneuverFromTomTom, eventsAhead, tomtomRoute, TEC_CAUSE } from '../public/js/nav.js';
+import { createTrip } from '../public/js/trip.js';
+const tt = JSON.parse(readFileSync(new URL('./fixtures/tomtom-orbis-chennai.json', import.meta.url)));
+
+test('TomTom route: geometry, live-traffic time and per-segment times that add up', () => {
+  const r = parseTomTomRoute(tt);
+  assert.equal(r.coords.length, 471);
+  assert.ok(Math.abs(r.distance - 17629) / 17629 < 0.01, `length ${r.distance}`);
+  const sum = r.segments.duration.reduce((a, b) => a + b, 0);
+  assert.ok(Math.abs(sum - 2776) < 2, `segment times ${sum} vs 2776 s`);
+  assert.equal(r.live, true); assert.equal(r.trafficDelayS, 107);
+});
+
+test('TomTom route: the jam and the road works on it, where they are', () => {
+  const r = parseTomTomRoute(tt);
+  assert.deepEqual(r.events.map((e) => [e.kind, e.label, e.speedKmh]), [['jam', 'Traffic jam', 9], ['works', 'Road works', 32]]);
+  assert.ok(r.events[0].at > 11000 && r.events[0].at < r.events[0].endAt && r.events[1].at > r.events[0].endAt);
+  assert.equal(r.events[0].alert, false, 'a jam goes on the chip, not a banner');
+  assert.equal(r.events[1].alert, true, 'road works get a warning');
+  const ahead = eventsAhead(r, r.events[0].at - 900);
+  assert.equal(Math.round(ahead[0].inM), 900);
+  assert.equal(eventsAhead(r, r.events[1].endAt + 1).length, 0, 'none left once past');
+  assert.equal(TEC_CAUSE[2], 'Accident');
+});
+
+test('TomTom turns: types, sentences, and arrival phrased for prompts', () => {
+  const r = parseTomTomRoute(tt);
+  assert.ok(r.maneuvers.length >= 10);
+  assert.ok(r.maneuvers.every((m, i) => i === 0 || m.at >= r.maneuvers[i - 1].at), 'in route order');
+  const last = r.maneuvers.at(-1);
+  assert.equal(last.type, 'arrive'); assert.match(turnText(last), /^Arrive at destination/);
+  assert.deepEqual(maneuverFromTomTom('ROUNDABOUT_SLIGHT_RIGHT'), { type: 'roundabout', modifier: 'right' });
+  assert.deepEqual(maneuverFromTomTom('KEEP_LEFT'), { type: 'fork', modifier: 'slight left' });
+  assert.deepEqual(maneuverFromTomTom('SHARP_RIGHT'), { type: 'turn', modifier: 'sharp right' });
+  assert.equal(maneuverFromTomTom('STRAIGHT'), null); assert.equal(maneuverFromTomTom('DEPART'), null);
+  assert.equal(turnText({ type: 'roundabout', modifier: 'right', text: 'At the roundabout take the third exit to stay on Basin Bridge Road' }), 'At the roundabout take the third exit to stay on Basin Bridge Road');
+  const say = createTurnPrompter();
+  assert.equal(say({ ...last, inM: 300 }, 30), 'In 300 m, arrive at destination, on the ' + last.modifier);
+});
+
+test('trip: TomTom with a key, OSRM without one or when TomTom refuses', async () => {
+  const urls = [];
+  const fetchOk = async (url) => { urls.push(url); return { ok: true, status: 200, json: async () => tt }; };
+  const dest = { lat: 13.0067, lon: 80.2572, name: 'Adyar' };
+  const t1 = createTrip({ dest, fetchImpl: fetchOk, routeKey: () => 'k' });
+  await t1.fetchRoute({ lat: 13.0827, lon: 80.2707 });
+  assert.match(urls[0], /api\.tomtom\.com\/maps\/orbis\/routing\/calculateRoute\/13\.082700,80\.270700:13\.006700,80\.257200\/json\?apiVersion=2&sectionType=traffic/);
+  assert.equal(t1.state.route.live, true);
+  assert.equal(t1.update(Date.now(), { lat: 13.0827, lon: 80.2707, accuracy: 5 }), false);
+  assert.equal(t1.update(Date.now() + 181000, { lat: 13.0827, lon: 80.2707, accuracy: 5 }), true, 'stale after 3 minutes');
+  // refused key: falls back to OSRM so there is still a route
+  const osrm = JSON.parse(readFileSync(new URL('./fixtures/osrm-bengaluru.json', import.meta.url)));
+  const fetchMixed = async (url) => /tomtom/.test(url) ? { ok: false, status: 403 } : { ok: true, status: 200, json: async () => osrm };
+  const t2 = createTrip({ dest, fetchImpl: fetchMixed, routeKey: () => 'bad' });
+  await t2.fetchRoute({ lat: 12.971848, lon: 77.594697 });
+  assert.equal(t2.state.route.live, undefined);
+  t2.update(Date.now(), { lat: 12.971848, lon: 77.594697, accuracy: 5 }); // on the route's first point
+  assert.match(t2.status().source, /TomTom live traffic failed: TomTom key rejected/);
+  await assert.rejects(tomtomRoute({ lat: 1, lon: 1 }, { lat: 2, lon: 2 }, 'x', async () => ({ ok: false, status: 400 })), /TomTom routing: 400/);
+});

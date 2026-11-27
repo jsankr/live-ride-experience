@@ -1684,7 +1684,7 @@ async function runTripSearch() {
 
 function startTrip(dest, targetT) {
   endTrip(true);
-  trip = createTrip({ dest, targetT });
+  trip = createTrip({ dest, targetT, routeKey: () => settings.tomtomKey || '' });
   $('tripWaze').href = wazeUrl(dest);
   $('tripGmaps').href = gmapsUrl(dest);
   $('tripDest').textContent = `To ${dest.name || `${dest.lat.toFixed(5)}, ${dest.lon.toFixed(5)}`}`;
