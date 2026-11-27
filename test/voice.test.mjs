@@ -30,3 +30,11 @@ test('voice: "go to office" asks for a trip to a saved place by name', () => {
   assert.equal(parseCommand('RideLens take me to MG Road', { requireWake: true }), 'place:mg road');
   assert.equal(parseCommand('navigate to my home'), 'place:home');
 });
+
+import { placeFromSpeech } from '../public/js/voice.js';
+test('a spoken destination loses the "take me to" around it', () => {
+  assert.equal(placeFromSpeech('take me to Phoenix Marketcity'), 'Phoenix Marketcity');
+  assert.equal(placeFromSpeech('RideLens navigate to the Apollo Hospital.'), 'Apollo Hospital');
+  assert.equal(placeFromSpeech('please go to Anna Nagar'), 'Anna Nagar');
+  assert.equal(placeFromSpeech('Besant Nagar beach'), 'Besant Nagar beach');
+});

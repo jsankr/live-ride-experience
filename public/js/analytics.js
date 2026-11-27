@@ -1,3 +1,4 @@
+import { createSpeedFilter } from './gps-speed.js';
 // RideLens analytics engine.
 // Pure, dependency-free and DOM-free so it runs identically in the browser
 // and in Node (see test/analytics.test.mjs).
@@ -115,6 +116,7 @@ function angleDiff(a, b) { // degrees, result in (-180, 180]
 
 export function createAnalyzer(options = {}) {
   const cfg = { ...DEFAULTS, ...options };
+  const speedFilter = createSpeedFilter();
   const s = {
     startT: null, lastImuT: null,
     gravity: null, up: null,
@@ -469,16 +471,12 @@ export function createAnalyzer(options = {}) {
     if (s.startT == null) s.startT = t;
     const prev = s.fix;
     // Safari reports -1 / NaN for "unknown" speed and heading; normalise to null
-    let speed = Number.isFinite(fix.speed) && fix.speed >= 0 ? fix.speed : null;
+    // Speed and distance only from real travel: standing still, GPS wander reads 0 km/h and
+    // adds no distance (see gps-speed.js). Safari's -1 / NaN "unknown" values are handled there.
+    const sf = speedFilter(t, fix);
+    const speed = sf.speed;
     fix = { ...fix, heading: Number.isFinite(fix.heading) && fix.heading >= 0 ? fix.heading : null };
-    if (prev && fix.accuracy != null && fix.accuracy < 30) {
-      const d = haversine(prev.lat, prev.lon, fix.lat, fix.lon);
-      const dts = (t - prev.t) / 1000;
-      if (speed == null && dts >= 0.5) speed = d / dts;
-      if (speed != null && speed > 100) speed = null; // > 360 km/h: a GPS jump, not motion
-      const jump = dts > 0 && d / dts > 100;
-      if (!jump && ((speed ?? 0) > 0.8 || d > 5)) s.distance += d;
-    }
+    if (prev && !sf.jump) s.distance += sf.stepM;
     let heading = fix.heading;
     if ((heading == null || Number.isNaN(heading)) && prev) {
       const y = Math.sin((fix.lon - prev.lon) * D2R) * Math.cos(fix.lat * D2R);
@@ -498,7 +496,7 @@ export function createAnalyzer(options = {}) {
     }
     s.gyroSum = 0; s.gyroN = 0;
     s.fix = { ...fix, heading, t };
-    if (speed != null) pushSpeed(t, speed, 'gps');
+    pushSpeed(t, speed, 'gps');
 
     if (fix.alt != null && (fix.altitudeAccuracy == null || fix.altitudeAccuracy < 30)) {
       s.alt = s.alt == null ? fix.alt : s.alt + (fix.alt - s.alt) * 0.2;

@@ -6,4 +6,4 @@ export const BUILD = '2026-11-26.5';
 // every module the app loads (kept equal to the offline cache list; checked by a test)
 export const MODULES = ['app.js', 'analytics.js', 'obd.js', 'sensors.js', 'charts.js', 'db.js', 'reports.js', 'air-quality.js',
   'evidence-location.js', 'evidence-analysis.js', 'trip.js', 'wrongside-watch.js', 'ytplayer.js', 'dashcam.js', 'hazards.js',
-  'ai-models.js', 'ride-reports.js', 'voice.js', 'build-id.js', 'places.js', 'select.js', 'nav.js', 'nav-hud.js'];
+  'ai-models.js', 'ride-reports.js', 'voice.js', 'build-id.js', 'places.js', 'select.js', 'nav.js', 'nav-hud.js', 'gps-speed.js', 'place-search.js'];

@@ -521,3 +521,6 @@ table.events tr.sel td { background: color-mix(in srgb, var(--status-critical) 1
 .hud-hz-dot.pothole { background: #ff6a1a; }
 @media (prefers-reduced-motion: reduce) { .hud-map-inner { transition: none; } .hud-hazard:not([hidden]) { animation: none; } }
 .hud-hazard.incident { background: rgba(205, 30, 30, .95); color: #fff; }
+#tripMic.on { color: #fff; background: var(--status-critical, #c0392b); border-color: transparent; animation: micPulse 1s ease-in-out infinite; }
+@keyframes micPulse { 50% { opacity: .65; } }
+@media (prefers-reduced-motion: reduce) { #tripMic.on { animation: none; } }

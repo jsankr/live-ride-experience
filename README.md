@@ -217,6 +217,8 @@ No typing for regular rides:
 - **Voice:** "go to office" or "RideLens take me to home" starts a trip to the saved place with that name.
 - **Storage:** stored only on this phone.
 
+**Type a few letters or say it.** Suggestions appear as you type: your saved and recent places at once, then places from TomTom Search (with your TomTom key: shops, hospitals, landmarks, streets; "phoe" finds Phoenix Marketcity) or from OpenStreetMap's Photon search without a key. Tap the microphone and say the place ("take me to Apollo Hospital Greams Road" works too). The voice command "take me to …" for a place you haven't saved opens the same list to pick from.
+
 ## Precise destinations
 Besides place search, the Trip dialog accepts:
 - **GPS coordinates**, decimal or degrees-minutes-seconds;
@@ -238,6 +240,8 @@ Four buttons: **previous · play · pause · next**. They're on the Music card, 
 - **Android native app**: a foreground service could keep GPS, sensors and the camera running behind other apps.
 
 ## What gets measured, and from which sensor
+
+**Speed and distance only from real travel.** A phone standing still still sees its GPS position wander a few metres; RideLens shows 0 km/h and adds no distance until where you actually got to over the last few seconds is beyond what the GPS's own accuracy allows for noise (and the phone's speed reading agrees). It reads 0 at a signal within about 3 seconds and shows motion within 1-2 seconds of moving off.
 
 | Metric | Source | How |
 |---|---|---|
