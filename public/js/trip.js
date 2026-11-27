@@ -10,6 +10,7 @@
 // hand the destination to them (deep links) and compute its own estimate.
 
 import { haversine } from './analytics.js';
+import { cumulative, locate, maneuversFrom } from './nav.js';
 
 export const OSRM = 'https://router.project-osrm.org';
 export const NOMINATIM = 'https://nominatim.openstreetmap.org';
@@ -158,7 +159,7 @@ export function createTrip({ dest, targetT = null, fetchImpl = fetch } = {}) {
   };
 
   async function fetchRoute(from) {
-    const url = `${OSRM}/route/v1/driving/${from.lon},${from.lat};${dest.lon},${dest.lat}?overview=full&geometries=geojson&annotations=distance,duration&steps=false`;
+    const url = `${OSRM}/route/v1/driving/${from.lon},${from.lat};${dest.lon},${dest.lat}?overview=full&geometries=geojson&annotations=distance,duration&steps=true`;
     const res = await fetchImpl(url);
     if (!res.ok) throw new Error(`routing server answered ${res.status}`);
     const j = await res.json();
@@ -169,6 +170,12 @@ export function createTrip({ dest, targetT = null, fetchImpl = fetch } = {}) {
       segments: r.legs[0].annotation, source: 'OSRM (OpenStreetMap, no live traffic)',
       durationScale: r.duration / Math.max(1, r.legs[0].annotation.duration.reduce((a, b) => a + b, 0)),
     };
+    // turn-by-turn for the riding HUD: metres along the route to each maneuver
+    t.route.cum = cumulative(t.route.coords);
+    const steps = r.legs[0].steps || [];
+    const stepTotal = steps.reduce((a, x) => a + (x.distance || 0), 0);
+    const k = stepTotal > 0 ? t.route.cum[t.route.cum.length - 1] / stepTotal : 1;
+    t.route.maneuvers = maneuversFrom(steps).map((m) => ({ ...m, at: m.at * k }));
     t.routedAt = Date.now(); t.routeErr = null; t.lastProj = null; t.offSince = 0;
     return t.route;
   }
@@ -218,6 +225,8 @@ export function createTrip({ dest, targetT = null, fetchImpl = fetch } = {}) {
       out.routeEta = etaStatus({ now, remainingS: rem.seconds, targetT, remainingM: rem.meters });
       if (p) out.paceEta = { ...etaStatus({ now, remainingS: rem.seconds * p, targetT, remainingM: rem.meters }), pace: p };
       out.source = t.route.source;
+      out.remainingS = rem.seconds * (p || 1);
+      if (t.route.cum && t.lastFix) out.travelledM = locate(t.route.coords, t.route.cum, t.lastFix).along;
     } else if (t.straightKm != null && t.avgKmh) {
       out.remainingKm = t.straightKm;
       out.straightEta = etaStatus({ now, remainingS: (t.straightKm / t.avgKmh) * 3600, targetT, remainingM: t.straightKm * 1000 });

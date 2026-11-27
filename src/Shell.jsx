@@ -161,6 +161,14 @@ export function Shell() {
                 <span><b id="hudDist">0.0</b><span id="hudDistUnit">km</span></span>
               </div>
               <div className="hud-alert" id="hudAlert" hidden></div>
+              {/* Waze-style navigation, top right over the sky: next turn, small heading-up map, ETA, traffic */}
+              <div className="hud-nav" id="hudNav" hidden>
+                <div className="hud-turn" id="hudTurn" hidden><span className="hud-turn-icon" id="hudTurnIcon" aria-hidden="true"></span><span><b id="hudTurnDist"></b><small id="hudTurnName"></small></span></div>
+                <div className="hud-map" id="hudMapBox"><div className="hud-map-inner" id="hudMap"></div><i className="hud-me" aria-hidden="true"></i></div>
+                <div className="hud-eta" id="hudEta" hidden><b id="hudEtaTime"></b><small id="hudEtaRest"></small></div>
+                <div className="hud-traffic" id="hudTraffic" hidden></div>
+              </div>
+              <div className="hud-hazard" id="hudHazard" role="alert" hidden><span className="hud-hazard-icon" id="hudHazardIcon" aria-hidden="true"></span><span><b id="hudHazardText"></b><small id="hudHazardDist"></small></span></div>
               <figure className="hud-zoom" id="hudZoom" hidden><img id="hudZoomImg" alt="" /><figcaption id="hudZoomTxt"></figcaption></figure>
               <span className="hud-heard" id="hudHeard" hidden></span>
               <div className="hud-bottom">
@@ -300,6 +308,12 @@ export function Shell() {
           <label className="check"><input type="checkbox" id="voiceWake" /> <span>Only react when I start with "RideLens…" (e.g. "RideLens report"), so talking to a pillion doesn't switch screens</span></label>
           <p className="fine" id="voiceMsg"></p>
           <label className="check"><input type="checkbox" id="camFullSet" defaultChecked /> <span>Open the camera full screen when it starts</span></label>
+          <label className="check"><input type="checkbox" id="navHud" defaultChecked /> <span><b>Navigation on the full-screen camera</b>: a small heading-up map in the top-right corner, the next turn and how far, ETA, traffic ahead, and an alert before each pothole or speed breaker.</span></label>
+          <label className="check"><input type="checkbox" id="navVoice" defaultChecked /> <span>Speak turn and hazard warnings (to a helmet headset)</span></label>
+          <details className="fine"><summary>Live traffic (optional TomTom key)</summary>
+            <label>TomTom API key <input id="tomtomKey" type="password" autoComplete="off" placeholder="from developer.tomtom.com" /></label>
+            <p>Waze and Google Maps don't share live traffic with other apps. With a free TomTom key (stored only on this phone), RideLens checks the speed on the road 0.4, 1.2 and 2.5 km ahead every 2 minutes during a trip (about 90 requests an hour; the free plan allows 2,500 a day). Without a key, traffic isn't shown.</p>
+          </details>
           <label className="check"><input type="checkbox" id="rawLog" /> <span>Keep raw sensor data with each ride (about 10 MB per hour). Lets a ride be re-analysed later when detection improves, and helps tune pothole detection for your bike.</span></label>
           <label>Units <select id="units"><option value="metric">km/h, °C, m</option><option value="imperial">mph, °F, ft</option></select></label>
           <label>Theme <select id="theme"><option value="">System</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
