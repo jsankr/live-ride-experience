@@ -18,7 +18,8 @@ if (window.__RIDELENS_SHELL_BUILD !== BUILD) {
   }
 }
 import { rememberPlace, savePlace, unsavePlace, forgetPlace, rideEnds, suggestPlaces, ago } from './places.js';
-import { Dashcam, fileName, retention, overlapping, stamp, clipsInRange, DAY_PARTS } from './dashcam.js';
+import { inTimeRange, REPORT_KINDS, selectReports, selectClips, selectEvents, removeEvents } from './select.js';
+import { Dashcam, fileName, retention, overlapping, stamp, DAY_PARTS } from './dashcam.js';
 import { mergeHazards, hazardsGeoJson, hazardsCsv } from './hazards.js';
 import { createAnalyzer, comfortClass, comfortLegend, haversine } from './analytics.js';
 import { Elm327, bleTransport, wsTransport } from './obd.js';
@@ -454,7 +455,7 @@ function insights(ride) {
 function stat(label, val, unit = '') { return `<div class="stat"><div class="label">${label}</div><div class="val">${val}${unit ? `<small>${unit}</small>` : ''}</div></div>`; }
 
 let currentRide = null;
-function openRide(ride) { show('report'); currentRide = ride; renderReport(ride); wireRideDocs(ride); }
+function openRide(ride) { show('report'); if (currentRide?.id !== ride.id) { evSelecting = false; evSel.clear(); evConfirm = false; } currentRide = ride; renderReport(ride); wireRideDocs(ride); }
 
 // ---------------- end-of-ride reports ----------------
 async function rideWrongSide(ride) {
@@ -462,7 +463,7 @@ async function rideWrongSide(ride) {
   return (await db.all('reports')).filter((r) => r.rideId === ride.id || (!r.rideId && r.t >= s.startT && r.t <= (s.endT || s.startT) + 60000));
 }
 async function wireRideDocs(ride) {
-  const reps = await rideWrongSide(ride);
+  const reps = (await rideWrongSide(ride)).filter((r) => r.status !== 'dismissed');
   const sum = summarizeRoad(ride);
   if (!$('rideDocsInfo')) return;
   $('rideDocsInfo').textContent = `${sum.counts.potholes} potholes · ${sum.counts.bumps} breakers · ${reps.length} wrong-side`;
@@ -501,7 +502,7 @@ async function shareDoc(name, html) {
 let resizeT;
 window.addEventListener('resize', () => {
   clearTimeout(resizeT);
-  resizeT = setTimeout(() => { if (currentRide && document.querySelector('#view-report.active')) renderReport(currentRide); }, 250);
+  resizeT = setTimeout(() => { if (currentRide && document.querySelector('#view-report.active')) rerenderReport(); }, 250);
 });
 
 // Report map pins: events closer than ~44 px on screen merge into one bubble
@@ -579,6 +580,41 @@ function drawHazardLayers(map, ride) {
   show('all');
 }
 
+// ---- ride report: remove events that weren't real ----
+const REMOVABLE = new Set(['pothole', 'bump', 'rough', 'brake', 'accel', 'crash', 'fall']);
+let evSelecting = false, evConfirm = false, evType = 'pothole', evFrom = '00:00', evTo = '23:59';
+const evSel = new Set();
+$('reportBody').addEventListener('change', (e) => {
+  const id = e.target.dataset?.evpick;
+  if (id) { if (e.target.checked) evSel.add(id); else evSel.delete(id); evConfirm = false; return rerenderReport(); }
+  if (e.target.id === 'evType') evType = e.target.value;
+  if (e.target.id === 'evFrom') evFrom = e.target.value || '00:00';
+  if (e.target.id === 'evTo') evTo = e.target.value || '23:59';
+});
+$('reportBody').addEventListener('click', async (e) => {
+  const a = e.target.closest('[data-ev]')?.dataset.ev; if (!a || !currentRide) return;
+  if (a === 'toggle') { evSelecting = !evSelecting; evSel.clear(); evConfirm = false; }
+  if (a === 'pick') {
+    // time only (no day): a ride may cross midnight
+    const ids = selectEvents(currentRide.events, { types: [$('evType')?.value || evType], from: evFrom, to: evTo === '23:59' ? '24:00' : evTo });
+    ids.forEach((id) => evSel.add(id)); evConfirm = false;
+    toast(`${ids.length} selected`);
+  }
+  if (a === 'none') { evSel.clear(); evConfirm = false; }
+  if (a === 'remove') evConfirm = evSel.size > 0;
+  if (a === 'no') evConfirm = false;
+  if (a === 'yes') {
+    const n = evSel.size;
+    const updated = removeEvents(currentRide, [...evSel]);
+    await db.put('rides', updated);
+    currentRide = updated; evSel.clear(); evConfirm = false;
+    toast(`Removed ${n} event${n > 1 ? 's' : ''}`);
+    wireRideDocs(updated);
+  }
+  rerenderReport();
+});
+function rerenderReport() { if (currentRide) { const y = scrollY; renderReport(currentRide); wireRideDocs(currentRide); scrollTo(0, y); } }
+
 function renderReport(ride) {
   const s = ride.summary;
   const [st, word] = SCORE_STATUS(s.scores.overall);
@@ -629,8 +665,18 @@ function renderReport(ride) {
       <article class="card"><div class="card-head"><h3>Clutch time per shift</h3><span class="muted">ms</span></div><div class="chart-wrap" id="cShift"></div></article>
       <article class="card"><h3>Event breakdown</h3><div id="cEvents"></div></article>
       <article class="card"><h3>Learned gear ratios</h3><div id="cGears"></div></article>
-      <article class="card wide"><h3>Event log</h3><div class="table-scroll"><table class="events"><thead><tr><th>Time</th><th>Event</th><th>Detail</th><th>Location</th></tr></thead><tbody>
-        ${ride.events.filter((e) => e.type !== 'shift').map((e) => `<tr><td>${fmtClock(e.t)}</td><td><span class="status-pill ${(EV[e.type] || {}).status || ''}">${(EV[e.type] || {}).title || e.type}</span></td><td>${esc(describe(e))}</td><td>${e.lat != null ? `<a href="https://maps.google.com/?q=${e.lat},${e.lon}" target="_blank" rel="noopener">${e.lat.toFixed(5)}, ${e.lon.toFixed(5)}</a>` : '—'}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">No events.</td></tr>'}
+      <article class="card wide"><div class="card-head"><h3>Event log</h3><span class="actions"><button class="ghost" data-ev="toggle" aria-pressed="${evSelecting}">${evSelecting ? 'Done' : 'Remove false events'}</button></span></div>
+        ${evSelecting ? `<div class="dc-bulk">
+          <p class="fine" style="margin:0">Tick events that weren't real (a manhole, a joint, a false crash), or select a type and time. Counts, the hazard map and the road report update. Wrong-side reports are deleted in the Camera tab.</p>
+          <div class="two"><label>Type <select id="evType">${[['pothole', 'Potholes'], ['bump', 'Speed breakers'], ['rough', 'Rough stretches'], ['brake', 'Hard braking'], ['accel', 'Hard acceleration'], ['crash', 'Crash alerts'], ['fall', 'Fall alerts']]
+            .filter(([t]) => ride.events.some((e) => e.type === t)).map(([t, l]) => `<option value="${t}" ${t === evType ? 'selected' : ''}>${l} (${ride.events.filter((e) => e.type === t).length})</option>`).join('')}</select></label>
+          <label>Between <span class="row" style="margin:0;gap:4px"><input type="time" id="evFrom" value="${evFrom}" style="flex:1"><input type="time" id="evTo" value="${evTo}" style="flex:1"></span></label></div>
+          <div class="row"><button class="ghost" data-ev="pick">Select matching</button><button class="ghost" data-ev="none">Clear</button><button class="danger" data-ev="remove" ${evSel.size ? '' : 'disabled'}>Remove ${evSel.size || ''} selected</button></div>
+          ${evConfirm ? `<div class="dc-confirm"><span>Remove ${evSel.size} event${evSel.size > 1 ? 's' : ''} from this ride? Its counts are recalculated.</span><span class="row" style="margin:0"><button class="danger" data-ev="yes">Remove</button><button class="ghost" data-ev="no">Keep</button></span></div>` : ''}
+        </div>` : ''}
+        ${ride.removedEvents?.length ? `<p class="fine">${ride.removedEvents.length} event${ride.removedEvents.length > 1 ? 's' : ''} removed by you as not real.</p>` : ''}
+        <div class="table-scroll"><table class="events"><thead><tr>${evSelecting ? '<th></th>' : ''}<th>Time</th><th>Event</th><th>Detail</th><th>Location</th></tr></thead><tbody>
+        ${ride.events.filter((e) => e.type !== 'shift').map((e) => `<tr class="${evSel.has(e.id) ? 'sel' : ''}">${evSelecting ? `<td>${REMOVABLE.has(e.type) ? `<input type="checkbox" data-evpick="${esc(e.id)}" aria-label="Select this event" ${evSel.has(e.id) ? 'checked' : ''}>` : ''}</td>` : ''}<td>${fmtClock(e.t)}</td><td><span class="status-pill ${(EV[e.type] || {}).status || ''}">${(EV[e.type] || {}).title || e.type}</span></td><td>${esc(describe(e))}</td><td>${e.lat != null ? `<a href="https://maps.google.com/?q=${e.lat},${e.lon}" target="_blank" rel="noopener">${e.lat.toFixed(5)}, ${e.lon.toFixed(5)}</a>` : '—'}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">No events.</td></tr>'}
       </tbody></table></div></article>
     </div>`;
 
@@ -808,10 +854,11 @@ function saveAnalysis(id, analysis) {
     const plate = analysis.plate;
     return {
       ...current, analysis,
-      vehicleType: current.vehicleType || (vehicle?.confidence >= 0.65 ? vehicle.type : ''),
-      color: current.color || (vehicle?.confidence >= 0.65 ? vehicle.color || '' : ''),
-      plate: current.plate || (plate?.confidence >= 75 ? plate.value : ''),
-      plateValid: current.plate ? current.plateValid : plate?.confidence >= 75,
+      vehicleType: current.vehicleType || (vehicle?.confidence >= 0.5 ? vehicle.type : ''),
+      color: current.color || (vehicle?.confidence >= 0.5 ? vehicle.color || '' : ''),
+      // a valid registration read in 2+ frames, or found by the plate model and read clearly enough
+      plate: current.plate || (plate?.accepted ?? plate?.confidence >= 75 ? plate.value : ''),
+      plateValid: current.plate ? current.plateValid : !!(plate?.accepted ?? plate?.confidence >= 75),
       synced: false,
     };
   });
@@ -974,6 +1021,9 @@ $('hudVoice').addEventListener('click', () => { settings.voiceOn = !voiceStop; $
 if (!voiceSupported()) { $('voiceMsg').textContent = 'This browser has no speech recognition.'; }
 // browsers only allow the microphone to start from a tap: the first tap anywhere starts listening
 else if (settings.voiceOn) document.addEventListener('pointerdown', () => { if (settings.voiceOn && !voiceStop) setVoice(true); }, { once: true, capture: true });
+// iPhone allows motion-sensor access only from a tap. Ask on the first tap, so a ride started
+// later by voice ("start ride") still gets motion data.
+document.addEventListener('pointerdown', () => { requestMotionPermission().catch(() => {}); }, { once: true, capture: true });
 window.__voice = { parseCommand, runVoice }; // for diagnostics/tests
 window.__autoCapture = (detection) => capture(detection); // diagnostics/tests: the path a hands-free detection takes
 $('camFull').addEventListener('click', async () => { if (!camOn) await setCamera(true); if (camOn) setImmersive(true); });
@@ -1109,14 +1159,62 @@ const thumb = (r) => {
   return thumbUrls.get(r.id);
 };
 
+// ---- wrong-side reports: bulk delete (false positives) ----
+let wsReps = [], wsSelecting = false;
+const wsSel = new Set();
+function refreshWsSel() {
+  const n = wsReps.filter((r) => wsSel.has(r.id)).length;
+  $('wsSelInfo').textContent = wsSelecting ? `${n} selected` : '';
+  $('wsDelete').disabled = !n; $('wsDelete').textContent = n ? `Delete ${n} selected` : 'Delete selected';
+  $('wsConfirm').hidden = true;
+}
+$('wsSelect').addEventListener('click', () => {
+  wsSelecting = !wsSelecting; if (!wsSelecting) wsSel.clear();
+  $('wsSelect').setAttribute('aria-pressed', String(wsSelecting)); $('wsSelect').textContent = wsSelecting ? 'Done' : 'Select to delete';
+  $('wsBulk').hidden = !wsSelecting; renderReports();
+});
+$('wsPart').addEventListener('change', () => { $('wsCustom').hidden = $('wsPart').value !== 'custom'; });
+$('wsPick').addEventListener('click', () => {
+  const part = $('wsPart').value;
+  const [from, to] = part === 'custom' ? [$('wsFrom').value || '00:00', $('wsTo').value || '24:00'] : DAY_PARTS[part];
+  const ids = selectReports(wsReps, { day: $('wsDay').value || null, from, to, kind: $('wsKind').value });
+  ids.forEach((id) => wsSel.add(id)); toast(ids.length ? `${ids.length} report${ids.length > 1 ? 's' : ''} selected` : 'No reports match'); renderReports();
+});
+$('wsNone').addEventListener('click', () => { wsSel.clear(); renderReports(); });
+$('wsDelete').addEventListener('click', () => {
+  const n = wsSel.size;
+  $('wsConfirmText').textContent = `Delete ${n} report${n > 1 ? 's' : ''} with their photos? They are also taken off their rides' wrong-side counts. This cannot be undone.`;
+  $('wsConfirm').hidden = false;
+});
+$('wsConfirmNo').addEventListener('click', () => { $('wsConfirm').hidden = true; });
+$('wsConfirmYes').addEventListener('click', async () => {
+  const ids = [...wsSel];
+  await deleteReports(ids);
+  wsSel.clear(); toast(`Deleted ${ids.length} report${ids.length > 1 ? 's' : ''}`); renderReports();
+});
+// delete reports and the matching wrong-side events in their rides
+async function deleteReports(ids) {
+  const drop = new Set(ids);
+  for (const id of ids) await db.del('reports', id);
+  for (const ride of await db.all('rides')) {
+    const evIds = ride.events.filter((e) => e.type === 'wrongside' && drop.has(e.id)).map((e) => e.id);
+    if (evIds.length) await db.put('rides', removeEvents(ride, evIds));
+  }
+  thumbUrls.forEach((u, id) => { if (drop.has(id)) { URL.revokeObjectURL(u); thumbUrls.delete(id); } });
+}
+
 async function renderReports() {
   const reps = (await db.all('reports')).sort((a, b) => b.t - a.t);
   const plates = new Map();
   reps.forEach((r) => r.plate && plates.set(r.plate, (plates.get(r.plate) || 0) + 1));
   const repeat = [...plates.values()].filter((n) => n > 1).length;
   $('wsStats').innerHTML = `<span><b>${reps.length}</b>reports</span><span><b>${reps.filter((r) => r.plateValid).length}</b>valid plates</span><span><b>${repeat}</b>repeat offenders</span><span><b>${reps.filter((r) => r.synced).length}</b>synced</span>`;
+  wsReps = reps;
+  for (const id of [...wsSel]) if (!reps.some((r) => r.id === id)) wsSel.delete(id);
+  $('wsList').classList.toggle('selecting', wsSelecting);
   $('wsList').innerHTML = reps.length ? reps.map((r) => `
-    <div class="item" data-id="${r.id}" role="button" tabindex="0">
+    <div class="item ${wsSel.has(r.id) ? 'sel' : ''}" data-id="${r.id}" role="button" tabindex="0">
+      ${wsSelecting ? `<input type="checkbox" data-wspick="${r.id}" aria-label="Select report ${esc(r.plate || '')}" ${wsSel.has(r.id) ? 'checked' : ''}>` : ''}
       <img src="${thumb(r)}" alt="">
       <span>${r.auto ? '<span class="tag-auto">AUTO</span> ' : ''}${r.plate ? `<span class="plate-tag">${esc(r.plate)}</span>` : '<span class="plate-tag none">NO PLATE</span>'} ${plates.get(r.plate) > 1 ? `<span class="status-pill critical">×${plates.get(r.plate)}</span>` : ''}<br>
       <span class="muted">${esc(r.vehicleType || 'Vehicle')} · ${new Date(r.t).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · ${esc(r.status)}${r.synced ? ' · synced' : ''}</span></span>
@@ -1126,7 +1224,19 @@ async function renderReports() {
     const item = event.target.closest('.item');
     if (item && ['Enter', ' '].includes(event.key)) { event.preventDefault(); item.click(); }
   };
-  $('wsList').onclick = async (e) => { const it = e.target.closest('.item'); if (it) openReport(await db.get('reports', it.dataset.id)); };
+  $('wsList').onclick = async (e) => {
+    const it = e.target.closest('.item'); if (!it) return;
+    if (wsSelecting) { if (e.target.matches('input')) return; const id = it.dataset.id; if (wsSel.has(id)) wsSel.delete(id); else wsSel.add(id); return renderReports(); }
+    openReport(await db.get('reports', it.dataset.id));
+  };
+  $('wsList').onchange = (e) => { const id = e.target.dataset?.wspick; if (!id) return; if (e.target.checked) wsSel.add(id); else wsSel.delete(id); renderReports(); };
+  // bulk panel: days present, kinds incl. vehicle types present
+  const days = [...new Set(reps.map((r) => stamp(r.t).slice(0, 10)))], dayNow = $('wsDay').value, kindNow = $('wsKind').value;
+  $('wsDay').innerHTML = ['<option value="">Any day</option>', ...days.map((d) => `<option ${d === dayNow ? 'selected' : ''}>${d}</option>`)].join('');
+  const types = [...new Set(reps.map((r) => r.vehicleType || r.analysis?.vehicle?.type).filter(Boolean))];
+  $('wsKind').innerHTML = [...REPORT_KINDS, ...types.map((t) => [`type:${t}`, `Vehicle: ${t}`])]
+    .map(([v, l]) => `<option value="${esc(v)}" ${v === kindNow ? 'selected' : ''}>${esc(l)} (${selectReports(reps, { kind: v }).length})</option>`).join('');
+  refreshWsSel();
   if (!wsMap) wsMap = makeMap('wsMap');
   if (wsMap) {
     setTimeout(() => wsMap.invalidateSize(), 50);
@@ -1156,7 +1266,7 @@ function findingsHtml(r) {
   if (au) rows.push(['Direction', `Coming toward you on your ${au.keep === 'right' ? 'right' : 'left'} (front view): closed in at ${au.closingKmh} km/h while you rode at ${au.ownSpeedKmh ?? '?'} km/h, so it was moving ~${au.oncomingKmh} km/h toward you. Seen ${au.sightings}× over ${au.spanS ?? '?'} s.`]);
   if (au) rows.push(['Camera focus', au.focused ? 'Moved to the vehicle before the photos' : 'Not adjustable in this browser (camera autofocus used)']);
   if (a.vehicle) rows.push(['Vehicle', `${a.vehicle.color ? `${a.vehicle.color} ` : ''}${a.vehicle.type} (${Math.round(a.vehicle.confidence * 100)} %)${a.vehicle.riders ? ` · ${a.vehicle.riders} rider${a.vehicle.riders > 1 ? 's' : ''} seen` : ''}`]);
-  if (a.plate) rows.push(['Plate read', `${a.plate.value} (OCR ${Math.round(a.plate.confidence)} %${a.plate.detector ? `, plate found ${Math.round(a.plate.detector * 100)} %` : ''})`]);
+  if (a.plate) rows.push(['Plate read', `${a.plate.value} (OCR ${Math.round(a.plate.confidence)} %${a.plate.votes ? `, same result ${a.plate.votes}× across ${a.plate.framesRead} frame${a.plate.framesRead > 1 ? 's' : ''}` : ''}${a.plate.detector ? `, plate found ${Math.round(a.plate.detector * 100)} %` : ''})${a.plate.accepted ? '' : ' · low confidence: check it'}`]);
   else if (a.plateBox) rows.push(['Plate read', 'Plate found but not readable: check the plate snapshot']);
   if (a.helmet) rows.push(['Helmet', a.helmet.verdict === 'not seen' ? (a.helmet.model === 'unavailable' ? 'Helmet model unavailable (offline?)' : 'Rider not visible clearly enough') : `${a.helmet.verdict === 'no helmet' ? 'Likely NO helmet' : a.helmet.verdict === 'helmet' ? 'Likely wearing a helmet' : 'Unclear'} (P(no helmet) ${a.helmet.p}, ${a.helmet.frames} frame${a.helmet.frames > 1 ? 's' : ''})`]);
   for (const n of a.notAssessed || []) rows.push([n.item, n.why]);
@@ -1188,7 +1298,7 @@ function openReport(r) {
     ${vehicle ? `<div class="row"><button class="ghost" data-a="vehicle">Use ${esc(vehicle.type)}</button>${vehicle.color ? `<button class="ghost" data-a="color">Use ${esc(vehicle.color)}</button>` : ''}<button class="ghost" data-a="vehicle-frame">Vehicle frame ${vehicle.frame + 1}${vehicle.rider ? ' · possible rider' : ''}</button></div>` : ''}
     ${plate ? `<div class="row"><button class="ghost" data-a="plate">Use ${esc(plate.value)}</button><button class="ghost" data-a="plate-frame">Plate frame ${plate.frame + 1}</button></div>` : ''}
     <div class="row">
-      <button class="ghost" data-a="analyse">Reanalyse photos</button>
+      <button class="ghost" data-a="analyse">Reanalyse all ${r.photos.length} frames</button>
       <button class="ghost" data-a="crop" aria-pressed="false">Select plate area</button>
     </div>
     <label for="rpPlate">Registration number</label>
@@ -1272,7 +1382,7 @@ function openReport(r) {
     if (a === 'plate-frame') selectFrame(plate.frame);
     if (a === 'close') dlg.close();
     if (a === 'save') { await collect(); thumbUrls.delete(r.id); toast('Saved'); dlg.close(); renderReports(); }
-    if (a === 'del') { if (confirm('Delete this report and its photos?')) { await db.del('reports', r.id); dlg.close(); renderReports(); } }
+    if (a === 'del') { if (confirm('Delete this report and its photos? It is also taken off its ride\'s wrong-side count.')) { await deleteReports([r.id]); dlg.close(); renderReports(); } }
     if (a === 'crop') {
       const on = !crop.classList.contains('selecting');
       toggleCrop(on);
@@ -1290,10 +1400,21 @@ function openReport(r) {
       const update = (m) => { if (m.status) progress.textContent = m.status; };
       progress.textContent = 'Analysing photos on this device…';
       try {
-        const analysis = a === 'analyse' ? await analyzeEvidence(r.photos, update)
+        const analysis = a === 'analyse' ? await analyzeEvidence(r.photos, update, r.auto || null, { allFrames: true })
           : selectedRegion ? { plate: await readPlateCrop(r.photos[frame].blob, selectedRegion, update) }
             : await analyzeEvidence([r.photos[frame]], update);
         if (!progress.isConnected || !dlg.open) return;
+        if (a === 'analyse') {
+          // keep what you typed; fill only empty fields; store the new snapshots and findings
+          await collect();
+          const updated = await saveAnalysis(r.id, analysis);
+          const p = analysis.plate, v = analysis.vehicle;
+          const msg = [v ? `${v.color ? `${v.color} ` : ''}${v.type}` : 'No vehicle found', p ? `plate ${p.value} (read the same ${p.votes}× in ${p.framesRead} frame${p.framesRead > 1 ? 's' : ''}${p.accepted ? '' : ', low confidence'})` : 'no readable plate'].join(' · ');
+          openReport(updated || await db.get('reports', r.id));
+          const m = document.getElementById('rpPlateMsg'); if (m) m.textContent = `All frames analysed: ${msg}. Review and tap Save.`;
+          renderReports();
+          return;
+        }
         const suggested = { plate: analysis.plate?.value, vehicleType: analysis.vehicle?.type, color: analysis.vehicle?.color };
         const applied = [];
         for (const [key, field] of Object.entries(fields)) {
@@ -1743,6 +1864,12 @@ async function renderClips() {
         ${c.locked ? `<span class="inc">${incText(c) || esc((c.incidents || []).join(', '))}</span>` : ''}</span>
       <span class="actions"><button class="ghost" data-a="play">Play</button><button class="ghost" data-a="save">Save</button><button class="ghost" data-a="lock">${c.locked ? 'Unlock' : 'Lock'}</button><button class="ghost" data-a="del" aria-label="Delete">✕</button></span>
     </div>`).join('')).join('') : '<p class="empty">No recordings yet. Start the camera with Dashcam on.</p>';
+  // "which clips": plain video, everything, or clips locked for a given reason (false alarms)
+  const reasons = [...new Set(clips.flatMap((c) => (c.locked ? c.incidents || [] : [])))].sort();
+  const kindNow = $('dcKind').value;
+  $('dcKind').innerHTML = [['unlocked', 'Plain video (not locked)'], ['any', 'All clips, locked too'],
+    ...reasons.map((r) => [r, `Locked: ${r} (${clips.filter((c) => c.locked && (c.incidents || []).includes(r)).length})`])]
+    .map(([v, l]) => `<option value="${esc(v)}" ${v === kindNow ? 'selected' : ''}>${esc(l)}</option>`).join('');
   // day picker for range selection
   const days = [...byDay.keys()], cur = $('dcDay').value;
   $('dcDay').innerHTML = days.map((d) => `<option ${d === cur ? 'selected' : ''}>${d}</option>`).join('');
@@ -1771,12 +1898,12 @@ $('dcPart').addEventListener('change', () => { $('dcCustom').hidden = $('dcPart'
 $('dcPick').addEventListener('click', () => {
   const part = $('dcPart').value;
   const [from, to] = part === 'custom' ? [$('dcFrom').value || '00:00', $('dcTo').value || '24:00'] : DAY_PARTS[part];
-  const ids = clipsInRange(dcClips, { day: $('dcDay').value || null, from, to, includeLocked: $('dcInclLocked').checked });
+  const ids = selectClips(dcClips, { day: $('dcDay').value || null, from, to, kind: $('dcKind').value });
   ids.forEach((id) => dcSel.add(id));
   toast(ids.length ? `${ids.length} clip${ids.length > 1 ? 's' : ''} selected` : 'No clips in that range');
   renderClips();
 });
-$('dcAll').addEventListener('click', () => { dcClips.filter((c) => !c.locked || $('dcInclLocked').checked).forEach((c) => dcSel.add(c.id)); renderClips(); });
+$('dcAll').addEventListener('click', () => { selectClips(dcClips, { kind: $('dcKind').value }).forEach((id) => dcSel.add(id)); renderClips(); });
 $('dcNone').addEventListener('click', () => { dcSel.clear(); renderClips(); });
 $('dcDelete').addEventListener('click', () => {
   const picked = dcClips.filter((c) => dcSel.has(c.id));

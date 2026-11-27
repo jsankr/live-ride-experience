@@ -19,3 +19,15 @@ test('csv export escapes quotes', () => {
   const csv = reportsToCsv([{ id: '1', t: 0, notes: 'said "hi"', plate: 'KA01AB1234' }]);
   assert.match(csv, /"said ""hi"""/);
 });
+
+import { plateFromText, fixPlateChars } from '../public/js/reports.js';
+test('plate text from real OCR output: pieces split by bolts and dots are recombined', () => {
+  // Tesseract output on the 26 Nov photo of TN 11 AH 1895 (dots and bolts between the groups)
+  assert.equal(plateFromText('TN 11AH\n\nA J\n\n1895\n'), 'TN11AH1895');
+  assert.equal(plateFromText('TN 11AH\n\n1895 1\n'), 'TN11AH1895');
+  assert.equal(plateFromText('TN 11 AH 1B95'), 'TN11AH1895', 'B read for 8 in the number part');
+  assert.equal(plateFromText('KA O1 AB I234'), 'KA01AB1234');
+  assert.equal(plateFromText('114\nH 1895 7\n'), null, 'no state code: not a plate');
+  assert.equal(plateFromText('XX 11 AB 1234'), null, 'unknown state code');
+  assert.equal(fixPlateChars('TN11AH1B95'), 'TN11AH1895');
+});

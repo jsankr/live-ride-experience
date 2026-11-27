@@ -42,6 +42,16 @@ Ride reports include a road-comfort map with clustered events, a heuristic score
 - When a ride ends, plain dashcam video of that ride is deleted. Locked incident clips (crash, fall, emergency braking, wrong-side, manual capture) are kept.
 - Raw sensor logging stays off unless you turn it on.
 
+**Removing false events:** in a ride report's *Event log*, tap **Remove false events**. Tick events that weren't real (a manhole, an expansion joint, a false crash alert), or choose a type and a time window and tap *Select matching*. **Remove** asks once. The ride's counts, the hazard map and the road report are then recalculated, and the report notes how many events you removed.
+
+**Deleting wrong-side reports:** *Camera → Reports → Select to delete*. Tick reports, or pick a day, a time and *which reports*:
+- automatic with no plate read;
+- automatic with no vehicle found in the photos;
+- not reviewed yet, dismissed, or captured by hand;
+- a vehicle type.
+
+Each option shows how many reports match. Deleted reports also come off their ride's wrong-side count.
+
 **Re-analyse** on a saved ride redoes potholes, breakers, rough stretches, hard braking/acceleration, crash and fall with the current rules (it needs the raw sensor log).
 
 ## Run it on your phone (no laptop)
@@ -125,6 +135,14 @@ With **Hands-free** ticked, RideLens watches by itself.
 - **Evidence analysis (once per detection, on the saved photos only, so no extra heat while riding):**
   - **Focus and zoom:** the camera focus is moved onto the vehicle where the browser allows it (Chrome on Android). iPhone browsers give web pages no focus control, so the camera's own autofocus is used there. Frames after the trigger are kept at full camera resolution, and the vehicle, rider and plate are cropped from them (digital zoom).
   - **Number plate:** found by a YOLOv9-t plate detector ([open-image-models](https://github.com/ankandrew/open-image-models), MIT), then read by OCR on just that strip and checked against Indian formats.
+  - **Plate reading, tested on a real photo (TN 11 AH 1895):**
+    - the plate detector runs on the whole photo (on a tight crop it missed the plate);
+    - OCR runs five preprocessing variants per frame, and the reads vote: the correct plate came out 9 times over 3 frames, while each wrong read appeared once;
+    - pieces split by bolts and the "•" separators are recombined, and O/0, I/1, B/8, S/5, Z/2 are corrected by position;
+    - plates need a real state code and a two-digit district (Delhi excepted);
+    - a registration read the same way twice fills the field by itself, while a single weak read is only a suggestion.
+  - **Colour:** taken from the middle of the vehicle, with the plate left out. A painted colour wins once it covers a fifth of the samples, e.g. "Maroon and black".
+  - **Reanalyse all N frames** in a report runs all of this on every saved photo, shows progress, and keeps anything you already typed.
   - **Helmet (two-wheelers):** the EfficientNet-B0 `helmet_v5` classifier ([vivekvar/helmet-v5](https://huggingface.co/vivekvar/helmet-v5), Apache-2.0, trained on Indian traffic-camera crops; 81 % validation accuracy) on the rider's head, averaged over the frames. It's shown as *likely helmet / likely no helmet / unclear* with its probability.
   - **Not assessed:** seat belts (not visible through a windscreen at road distance, and no tested model exists for this view) and mirrors (no public model). The report says so instead of guessing.
   - **How it runs:** the models are in `public/models/` (24 MB). They are downloaded once and cached on the phone, and run with ONNX Runtime Web.
@@ -168,6 +186,7 @@ A pothole's dip must come within 0.2 s before the slam. An earlier dip is fork d
   - tick whole days or single clips while scrolling.
 
   Locked incident clips are left out unless you tick *Also select locked incident clips*. Delete asks once, on the page.
+- **Delete by lock reason:** *Which clips* chooses between plain video, all clips, or only clips locked for one reason (e.g. *Locked: Crash-level impact*), with a count for each. That clears footage locked by false alarms without touching real incidents.
 - **Limit:** like every camera feature, recording stops whenever RideLens isn't on screen.
 
 ## Saved and recent destinations

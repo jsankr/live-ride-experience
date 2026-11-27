@@ -207,7 +207,8 @@ export function Shell() {
               <label>From <input type="time" id="dcFrom" defaultValue="06:00" /></label>
               <label>To <input type="time" id="dcTo" defaultValue="09:00" /></label>
             </div>
-            <label className="check"><input type="checkbox" id="dcInclLocked" /> <span>Also select locked incident clips</span></label>
+            <label>Which clips <select id="dcKind"><option value="unlocked">Plain video (not locked)</option><option value="any">All clips, locked too</option></select></label>
+            <p className="fine" style={{ margin: 0 }}>To clear footage locked by false alarms, pick the lock reason here (e.g. "Locked: Crash-level impact").</p>
             <div className="row">
               <button type="button" className="ghost" id="dcPick">Select this range</button>
               <button type="button" className="ghost" id="dcAll">Select all</button>
@@ -226,6 +227,30 @@ export function Shell() {
             <span className="actions"><button className="ghost" id="wsDoc">Police report</button><button className="ghost" id="wsCsv">CSV</button><button className="ghost" id="wsJson">JSON</button><button className="ghost" id="wsSync">Sync</button></span>
           </div>
           <div id="wsStats" className="ws-stats"></div>
+          <div className="dc-tools"><button type="button" className="ghost" id="wsSelect" aria-pressed="false">Select to delete</button><span className="muted" id="wsSelInfo"></span></div>
+          <div className="dc-bulk" id="wsBulk" hidden>
+            <div className="two">
+              <label>Day <select id="wsDay"></select></label>
+              <label>Time <select id="wsPart">
+                <option value="all">Whole day</option><option value="morning">Morning (05:00–12:00)</option><option value="afternoon">Afternoon (12:00–17:00)</option>
+                <option value="evening">Evening (17:00–22:00)</option><option value="night">Night (22:00–05:00)</option><option value="custom">Custom…</option>
+              </select></label>
+            </div>
+            <div className="two" id="wsCustom" hidden>
+              <label>From <input type="time" id="wsFrom" defaultValue="06:00" /></label>
+              <label>To <input type="time" id="wsTo" defaultValue="09:00" /></label>
+            </div>
+            <label>Which reports <select id="wsKind"></select></label>
+            <div className="row">
+              <button type="button" className="ghost" id="wsPick">Select matching</button>
+              <button type="button" className="ghost" id="wsNone">Clear</button>
+              <button type="button" className="danger" id="wsDelete" disabled>Delete selected</button>
+            </div>
+            <div className="dc-confirm" id="wsConfirm" hidden>
+              <span id="wsConfirmText"></span>
+              <span className="row" style={{ margin: 0 }}><button type="button" className="danger" id="wsConfirmYes">Delete</button><button type="button" className="ghost" id="wsConfirmNo">Keep</button></span>
+            </div>
+          </div>
           <div id="wsList" className="list"></div>
         </article>
         <article className="card wide map-card"><div id="wsMap" className="map"></div></article>

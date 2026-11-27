@@ -310,6 +310,31 @@ try {
   assert.equal(await stalePage.evaluate(() => window.__RIDELENS_APP_BUILD === window.__RIDELENS_SHELL_BUILD), true, 'reloaded onto matching code');
   await stale.close();
 
+  // Voice commands end to end, with a stand-in recogniser (the real one needs Apple's/Google's
+  // servers): it ends after every phrase like iOS does, so the auto-restart is exercised too.
+  const voiceCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block', permissions: ['camera', 'geolocation'], geolocation: { latitude: 12.97, longitude: 77.59 } });
+  await voiceCtx.addInitScript(() => {
+    window.__sr = { starts: 0, active: null };
+    class FakeSR { start() { window.__sr.starts++; window.__sr.active = this; setTimeout(() => this.onstart?.(), 10); } abort() { setTimeout(() => this.onend?.(), 5); } stop() { this.abort(); } }
+    window.webkitSpeechRecognition = FakeSR; window.SpeechRecognition = FakeSR;
+    window.__say = (text) => { const rec = window.__sr.active; rec.onresult?.({ resultIndex: 0, results: [Object.assign([{ transcript: text }], { isFinal: true })] }); setTimeout(() => rec.onend?.(), 20); };
+  });
+  const voicePage = await voiceCtx.newPage();
+  voicePage.on('pageerror', (error) => errors.push(error.message));
+  await voicePage.goto(base);
+  // the app module loads after the page's load event: tap only once it is listening for taps
+  // (on CI the earlier tap landed before app.js had run, and voice never started)
+  await voicePage.waitForFunction(() => !!window.__voice && window.__RIDELENS_APP_BUILD);
+  await voicePage.mouse.click(200, 300); // first tap: microphone (and motion access) may start
+  await voicePage.waitForFunction(() => window.__sr.starts > 0, null, { timeout: 10000 });
+  const say = async (text, check) => { await voicePage.evaluate((t) => window.__say(t), text); await voicePage.waitForFunction(check, null, { timeout: 8000 }); };
+  await say('RideLens start ride', () => document.getElementById('recLabel').textContent === 'Stop');
+  await say('RideLens start camera', () => document.body.classList.contains('immersive') && document.getElementById('hudVoiceText').textContent === 'Listening');
+  await say('RideLens history', () => document.querySelector('#view-history.active') && !document.body.classList.contains('immersive'));
+  await say('stop the ride', () => document.getElementById('recLabel').textContent !== 'Stop');
+  assert.ok(await voicePage.evaluate(() => window.__sr.starts >= 5), 'listener restarted itself after each phrase');
+  await voiceCtx.close();
+
   const offline = await browser.newContext();
   await offline.route('https://**/*', (route) => route.abort());
   const offlinePage = await offline.newPage();

@@ -488,3 +488,7 @@ body.immersive .cam .hud:not([hidden]) { grid-template-columns: minmax(0, 1fr); 
 .quick-places { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
 .quick-places:empty { display: none; }
 .chip-go { font-size: 13px; padding: 7px 12px; border-radius: 999px; }
+table.events tr.sel td { background: color-mix(in srgb, var(--status-critical) 12%, transparent); }
+#wsList.selecting .item { grid-template-columns: auto 88px 1fr auto; }
+.list .item.sel { outline: 2px solid var(--status-critical); }
+.list .item > input, table.events input { width: 22px; height: 22px; accent-color: var(--status-critical); }

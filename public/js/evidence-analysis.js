@@ -1,4 +1,4 @@
-import { normalizePlate, ocrPlate } from './reports.js';
+import { normalizePlate, ocrPlate, plateFromText } from './reports.js';
 import { detectPlates, classifyHelmet, helmetVerdict, headBox } from './ai-models.js';
 
 let model;
@@ -72,27 +72,73 @@ function imageRegion(image, box, width, height) {
   return canvas;
 }
 
-function bodyColour(image, [x, y, w, h]) {
-  // Sample both sides of the vehicle body, away from the plate and windscreen.
+// ---- vehicle colour ----
+// One pixel's colour name.
+export function colourName(r, g, b) {
+  const hi = Math.max(r, g, b), lo = Math.min(r, g, b), delta = hi - lo;
+  if (hi < 55) return 'Black';
+  if (delta < 28 || delta / hi < 0.22) return hi > 200 ? 'White' : hi > 140 ? 'Silver' : hi < 85 ? 'Black' : 'Gray';
+  const hue = (60 * (hi === r ? (g - b) / delta : hi === g ? 2 + (b - r) / delta : 4 + (r - g) / delta) + 360) % 360;
+  if (hue < 18 || hue >= 335) return hi < 150 ? 'Maroon' : 'Red';
+  if (hue < 45) return hi < 150 ? 'Brown' : 'Orange';
+  if (hue < 70) return 'Yellow';
+  if (hue < 165) return 'Green';
+  if (hue < 255) return 'Blue';
+  if (hue < 300) return 'Purple';
+  return 'Pink';
+}
+// Paint colour from pixels sampled on the vehicle body. Vehicles are mostly one painted
+// colour plus black trim, tyres and glass, so a painted colour wins once it covers a fifth
+// of the samples; otherwise the commonest neutral (white, silver, gray, black) is used.
+export function vehicleColour(pixels) {
+  if (!pixels.length) return null;
   const votes = new Map();
-  for (const side of [0.14, 0.66]) {
-    const canvas = imageRegion(image, [x + side * w, y + 0.40 * h, 0.20 * w, 0.33 * h], 24, 24);
-    const { data } = canvas.getContext('2d').getImageData(0, 0, 24, 24);
-    for (let i = 0; i < data.length; i += 4) {
-      const [r, g, b] = data.subarray(i, i + 3);
-      const hi = Math.max(r, g, b), lo = Math.min(r, g, b), delta = hi - lo;
-      let name = hi < 70 ? 'Black' : hi > 205 ? 'White' : 'Gray';
-      if (hi >= 70 && delta > 32 && delta / hi > 0.26) {
-        const hue = 60 * (hi === r ? (g - b) / delta : hi === g ? 2 + (b - r) / delta : 4 + (r - g) / delta);
-        const angle = (hue + 360) % 360;
-        name = angle < 20 || angle >= 345 ? 'Red' : angle < 48 ? (hi < 150 ? 'Brown' : 'Orange')
-          : angle < 70 ? 'Yellow' : angle < 165 ? 'Green' : angle < 265 ? 'Blue' : angle < 305 ? 'Purple' : 'Pink';
-      }
-      votes.set(name, (votes.get(name) || 0) + 1);
-    }
+  for (const [r, g, b] of pixels) { const n = colourName(r, g, b); votes.set(n, (votes.get(n) || 0) + 1); }
+  const share = (n) => (votes.get(n) || 0) / pixels.length;
+  const reds = share('Red') + share('Maroon');
+  const painted = [['Red', reds], ...['Orange', 'Brown', 'Yellow', 'Green', 'Blue', 'Purple', 'Pink'].map((n) => [n, share(n)])].sort((a, b) => b[1] - a[1])[0];
+  if (painted[1] >= 0.2) {
+    const name = painted[0] === 'Red' && share('Maroon') > share('Red') ? 'Maroon' : painted[0];
+    return share('Black') >= 0.25 ? `${name} and black` : name;
   }
-  const [name, count] = [...votes].sort((a, b) => b[1] - a[1])[0];
-  return count >= 0.55 * 1152 ? name : null;
+  const neutral = ['White', 'Silver', 'Gray', 'Black'].map((n) => [n, share(n)]).sort((a, b) => b[1] - a[1])[0];
+  return neutral[1] >= 0.4 ? neutral[0] : null;
+}
+// Sample the middle of the vehicle (away from road, wheels and background at the box edges),
+// skipping the number plate.
+function bodyColour(image, [x, y, w, h], skip = null) {
+  const region = [x + w * 0.22, y + h * 0.22, w * 0.56, h * 0.5];
+  const canvas = imageRegion(image, region, 48, 48);
+  const { data } = canvas.getContext('2d').getImageData(0, 0, 48, 48);
+  const px = [];
+  for (let i = 0; i < 48 * 48; i++) {
+    if (skip) {
+      const gx = region[0] + ((i % 48) + 0.5) * region[2] / 48, gy = region[1] + (Math.floor(i / 48) + 0.5) * region[3] / 48;
+      if (gx >= skip[0] && gx <= skip[0] + skip[2] && gy >= skip[1] && gy <= skip[1] + skip[3]) continue;
+    }
+    px.push([data[i * 4], data[i * 4 + 1], data[i * 4 + 2]]);
+  }
+  return vehicleColour(px);
+}
+
+// ---- plate voting across frames ----
+// reads: [{ value, confidence (OCR 0-100), detector (0-1|null), frame }]. The same valid
+// registration read in two or more frames is far more trustworthy than one high OCR score.
+export function votePlates(reads) {
+  if (!reads.length) return null;
+  const by = new Map();
+  for (const r of reads) {
+    const g = by.get(r.value) || { value: r.value, votes: 0, confidence: 0, detector: null, frame: r.frame };
+    g.votes++;
+    if (r.confidence > g.confidence) { g.confidence = r.confidence; g.frame = r.frame; }
+    g.detector = Math.max(g.detector ?? 0, r.detector ?? 0) || g.detector;
+    by.set(r.value, g);
+  }
+  const best = [...by.values()].sort((a, b) => b.votes - a.votes || b.confidence - a.confidence)[0];
+  const frames = new Set(reads.map((r) => r.frame)).size;
+  // accepted = good enough to fill the registration field by itself (always reviewable)
+  const accepted = best.confidence >= 75 || best.votes >= 2 || ((best.detector ?? 0) >= 0.6 && best.confidence >= 30);
+  return { ...best, framesRead: frames, accepted };
 }
 
 function likelyPlateRegions(image, [x, y, w, h]) {
@@ -135,35 +181,49 @@ function likelyPlateRegions(image, [x, y, w, h]) {
 }
 
 function plateCandidate(result) {
-  const lines = result.text.toUpperCase().split(/\n/).map((line) => line.replace(/[^A-Z0-9]/g, '')).filter(Boolean);
-  const candidates = [lines.join(''), ...lines];
-  for (const text of candidates) {
-    const match = normalizePlate(text);
-    if (match.valid) return { value: match.plate, confidence: result.confidence };
-  }
-  return null;
+  const plate = plateFromText(result.text);
+  return plate ? { value: plate, confidence: result.confidence } : null;
 }
 
-async function recognizeRegion(image, box, onProgress, segmentation = '11') {
+// OCR one image region. plain: greyscale only; binarize: Otsu black/white. A white border
+// is added because Tesseract reads text touching the image edge badly.
+async function recognizeRegion(image, box, onProgress, segmentation = '11', binarize = false, contrast = !binarize) {
   const [,, w, h] = box;
-  const canvas = imageRegion(image, box, Math.min(1200, Math.max(540, w)), Math.min(1000, Math.max(64, Math.round(Math.min(1200, Math.max(540, w)) * h / w))));
-  const ctx = canvas.getContext('2d');
-  const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const width = Math.min(1200, Math.max(900, w)), height = Math.min(1000, Math.max(64, Math.round(width * h / w))), B = 30;
+  const src = imageRegion(image, box, width, height);
+  const canvas = document.createElement('canvas'); canvas.width = width + 2 * B; canvas.height = height + 2 * B;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.drawImage(src, B, B);
+  const pixels = ctx.getImageData(B, B, width, height), n = width * height, gray = new Float32Array(n);
   let sum = 0;
-  for (let i = 0; i < pixels.data.length; i += 4) {
-    const gray = 0.299 * pixels.data[i] + 0.587 * pixels.data[i + 1] + 0.114 * pixels.data[i + 2];
-    pixels.data[i] = gray;
-    sum += gray;
+  for (let i = 0; i < n; i++) { gray[i] = 0.299 * pixels.data[i * 4] + 0.587 * pixels.data[i * 4 + 1] + 0.114 * pixels.data[i * 4 + 2]; sum += gray[i]; }
+  const mean = sum / n;
+  let cut = mean;
+  if (binarize) { // Otsu threshold
+    const hist = new Array(256).fill(0);
+    for (const g of gray) hist[Math.min(255, Math.max(0, Math.round(g)))]++;
+    let sumAll = 0; for (let t = 0; t < 256; t++) sumAll += t * hist[t];
+    let wB = 0, sumB = 0, best = -1;
+    for (let t = 0; t < 256; t++) {
+      wB += hist[t]; if (!wB || wB === n) continue;
+      sumB += t * hist[t];
+      const mB = sumB / wB, mF = (sumAll - sumB) / (n - wB), v = wB * (n - wB) * (mB - mF) ** 2;
+      if (v > best) { best = v; cut = t; }
+    }
   }
-  const mean = sum / (pixels.data.length / 4);
-  for (let i = 0; i < pixels.data.length; i += 4) {
-    const gray = (pixels.data[i] - mean) * 1.65 + 128;
-    pixels.data[i] = pixels.data[i + 1] = pixels.data[i + 2] = gray;
+  for (let i = 0; i < n; i++) {
+    const v = binarize ? (gray[i] > cut ? 255 : 0) : contrast ? (gray[i] - mean) * 1.65 + 128 : gray[i];
+    pixels.data[i * 4] = pixels.data[i * 4 + 1] = pixels.data[i * 4 + 2] = v;
   }
-  ctx.putImageData(pixels, 0, 0);
+  ctx.putImageData(pixels, B, B);
   const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
   return ocrPlate(blob, onProgress, segmentation);
 }
+
+// Preprocessing variants tried on a detected plate. Chosen on a real photo (TN 11 AH 1895,
+// 26 Nov): no single one is reliable, but the correct plate came out of most of them while
+// each wrong read appeared once, so the reads vote. [inset of the detected box, psm, mode]
+const PLATE_VARIANTS = [[-0.06, '11', 'plain'], [0.04, '11', 'plain'], [0.04, '6', 'plain'], [0.04, '7', 'plain'], [0, '11', 'otsu']];
 
 export async function readPlateCrop(blob, region, onProgress) {
   const bitmap = await createImageBitmap(blob);
@@ -184,60 +244,83 @@ export const NOT_ASSESSED = [
   ['Rear-view mirrors', 'Not checked: no public model detects two-wheeler mirrors; check the snapshot yourself.'],
 ];
 
-export async function analyzeEvidence(photos, onProgress, hint = null) {
+// options.allFrames: analyse every photo instead of the five sharpest ("Reanalyse all frames")
+export async function analyzeEvidence(photos, onProgress, hint = null, { allFrames = false } = {}) {
+  const say = (status) => onProgress?.({ status });
   const frames = photos.map((photo, index) => ({ ...photo, index }))
-    .sort((a, b) => (b.sharpness ?? 0) - (a.sharpness ?? 0)).slice(0, 5);
+    .sort((a, b) => (b.sharpness ?? 0) - (a.sharpness ?? 0)).slice(0, allFrames ? photos.length : 5);
   const regions = [];
   let unavailable = false;
   try {
     const detector = await loadDetector();
-    for (const photo of frames) {
+    for (const [n, photo] of frames.entries()) {
+      say(`Finding the vehicle: photo ${n + 1} of ${frames.length}…`);
       const image = await createImageBitmap(photo.blob);
       try {
-        const result = findSubjects(await detector.detect(image, 15, 0.4), image.width, image.height, hint);
-        if (result) regions.push({ ...result, frame: photo.index, color: bodyColour(image, result.box) });
+        const result = findSubjects(await detector.detect(image, 15, 0.35), image.width, image.height, hint);
+        if (result) regions.push({ ...result, frame: photo.index });
       } finally { image.close(); }
     }
   } catch { unavailable = true; }
   regions.sort((a, b) => b.rank * (b.rider ? 1.3 : 1) - a.rank * (a.rider ? 1.3 : 1));
   const top = regions[0];
 
-  // 1. number plate: the plate detector finds it inside the vehicle, then OCR reads only that strip
-  let plate = null, plateCrop = null, plateModel = 'ok';
-  const targets = (regions.length ? regions : frames.map(({ index }) => ({ frame: index }))).slice(0, 4);
-  for (const target of targets) {
+  // 1. number plate, in every analysed frame: the detector runs on the whole photo (it was
+  // trained on road scenes; a tight crop makes the plate too big for it) and, for small
+  // distant vehicles, on the vehicle enlarged. Plates inside the vehicle win; each is read
+  // by OCR and the frames vote.
+  const reads = [];
+  let plateCrop = null, plateModel = 'ok';
+  const targets = (regions.length ? regions : frames.map(({ index }) => ({ frame: index }))).slice(0, allFrames ? 99 : 4);
+  for (const [n, target] of targets.entries()) {
+    say(`Reading the number plate: photo ${n + 1} of ${targets.length}…`);
     const image = await createImageBitmap(photos[target.frame].blob);
     try {
       let found = [];
-      try { found = await detectPlates(image, target.box ? pad(target.box, 0.08) : undefined); } catch { plateModel = 'unavailable'; }
-      for (const pl of found.slice(0, 2)) {
-        const crop = pad(pl.box, 0.06);
-        if (!plateCrop || pl.score > plateCrop.score) plateCrop = { score: pl.score, frame: target.frame, blob: await cropJpeg(image, crop, 480, 0.92) };
+      try {
+        found = await detectPlates(image);
+        if (target.box && target.box[2] * target.box[3] < 0.25 * image.width * image.height) found.push(...await detectPlates(image, pad(target.box, 0.15)));
+      } catch { plateModel = 'unavailable'; }
+      const inside = (b) => !target.box || (b[0] + b[2] / 2 >= target.box[0] && b[0] + b[2] / 2 <= target.box[0] + target.box[2] && b[1] + b[3] / 2 >= target.box[1] && b[1] + b[3] / 2 <= target.box[1] + target.box[3] * 1.05);
+      found = found.filter((pl) => inside(pl.box)).sort((a, b) => b.score - a.score);
+      if (found.length && target.box) target.plateBox = found[0].box;
+      for (const pl of found.slice(0, 1)) {
+        if (!plateCrop || pl.score > plateCrop.score) plateCrop = { score: pl.score, frame: target.frame, blob: await cropJpeg(image, pad(pl.box, 0.06), 480, 0.92) };
         try {
-          for (const mode of ['7', '8']) {
-            const candidate = plateCandidate(await recognizeRegion(image, crop, onProgress, mode));
-            if (candidate && (!plate || candidate.confidence > plate.confidence)) plate = { ...candidate, frame: target.frame, detector: +pl.score.toFixed(2) };
-            if (candidate) break;
+          const here = [];
+          for (const [inset, mode, kind] of PLATE_VARIANTS) {
+            const crop = pad(pl.box, -inset); // negative inset = a little margin around the plate
+            const candidate = plateCandidate(await recognizeRegion(image, crop, onProgress, mode, kind === 'otsu', false));
+            if (!candidate) continue;
+            here.push(candidate.value);
+            reads.push({ ...candidate, frame: target.frame, detector: +pl.score.toFixed(2) });
+            if (here.filter((v) => v === candidate.value).length >= 2 && !allFrames) break; // two agreeing reads in this frame are enough
           }
         } catch { unavailable = true; }
-        if (plate?.confidence >= 85) break;
       }
       // fallback when the plate model is unavailable or found nothing: older brightness heuristics
-      if (!found.length && !plate) {
+      if (!found.length && !reads.length) {
         try {
           const [x, y, w, h] = target.box || [0, 0, image.width, image.height];
           const precise = target.box ? likelyPlateRegions(image, target.box) : [];
           const broad = target.box ? [[x + w * 0.23, y + h * 0.54, w * 0.54, h * 0.39], [x + w * 0.08, y + h * 0.36, w * 0.84, h * 0.64]] : [[x, y, w, h]];
           for (const crop of [...precise, ...broad]) {
             const candidate = plateCandidate(await recognizeRegion(image, crop, onProgress, precise.includes(crop) ? '7' : '11'));
-            if (candidate && (!plate || candidate.confidence > plate.confidence)) plate = { ...candidate, frame: target.frame, detector: null };
-            if (plate?.confidence >= 85) break;
+            if (candidate) { reads.push({ ...candidate, frame: target.frame, detector: null }); if (candidate.confidence >= 85) break; }
           }
         } catch { unavailable = true; }
       }
+      // colour from the body, now that the plate's position is known
+      if (target.box) target.color = bodyColour(image, target.box, target.plateBox);
     } finally { image.close(); }
-    if (plate?.confidence >= 85) break;
+    const v = votePlates(reads);
+    if (!allFrames && v && v.confidence >= 85 && v.votes >= 1 && n >= 1) break;
   }
+  const plate = votePlates(reads);
+  // colour: the most common answer over the frames
+  const colours = regions.map((r) => r.color).filter(Boolean);
+  const colour = colours.length ? [...colours.reduce((m, c) => m.set(c, (m.get(c) || 0) + 1), new Map())].sort((a, b) => b[1] - a[1])[0][0] : null;
+  if (top) top.color = colour;
 
   // 2. rider and helmet (two-wheelers): head crop of the rider on the matched vehicle, every frame it is seen
   const helmetScores = [];
