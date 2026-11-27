@@ -102,6 +102,18 @@ The Trip card shows:
   - **Waze and Google Maps do not let other apps read their live ETA**, so their numbers can't appear inside RideLens.
   - Opening either app sends RideLens to the background, where browsers pause its sensors.
 
+## Navigation on the camera screen (Waze-style)
+
+On the full-screen camera, a small column in the top-right corner (over the sky, clear of the road and the left kerb the wrong-side watcher looks at) shows:
+
+- **Next turn and how far** (with a trip): arrow, distance along the route and street name, from OSRM route steps. Spoken prompts at roughly 25 s, 9 s and at the turn, to a helmet headset.
+- **A small heading-up map** (132 px square): your position, the route, and known potholes and breakers nearby.
+- **ETA**: arrival time, distance and minutes left, at your own pace once there is enough of the trip to judge it.
+- **Traffic ahead** (with a trip and an optional free TomTom key): the speed on the road 0.4, 1.2 and 2.5 km ahead against its free-flow speed, checked every 2 minutes: clear, slow, heavy, standstill or closed.
+- **Pothole and speed-breaker alerts**: a yellow (breaker) or orange (pothole) banner with a live countdown, a vibration and a spoken warning about 7 seconds before you reach one (never under 60 m). The hazards are the ones RideLens detected on your own earlier rides plus speed breakers mapped in OpenStreetMap. With a trip they are matched along the route; without one, in the direction you are riding.
+
+What can't be copied from Waze: its live traffic and its users' crowd reports are not available to other apps, so traffic comes from TomTom (your key) and hazards from your rides and OpenStreetMap. Turn it off, or the spoken warnings, in Setup.
+
 ## Hands-free wrong-side detection
 Turn on the camera in **Wrong-side** with the phone facing the road. It opens **full screen**: the live picture fills the phone, and everything is drawn over it on a transparent heads-up display.
 - **Status:** dashcam REC, watch status, GPS, clock, speed, and this ride's wrong-side / pothole / breaker counts.

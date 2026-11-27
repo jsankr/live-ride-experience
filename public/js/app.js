@@ -21,6 +21,7 @@ import { rememberPlace, savePlace, unsavePlace, forgetPlace, rideEnds, suggestPl
 import { inTimeRange, REPORT_KINDS, selectReports, selectClips, selectEvents, removeEvents } from './select.js';
 import { Dashcam, fileName, retention, overlapping, stamp, DAY_PARTS } from './dashcam.js';
 import { mergeHazards, hazardsGeoJson, hazardsCsv } from './hazards.js';
+import { createNavHud } from './nav-hud.js';
 import { createAnalyzer, comfortClass, comfortLegend, haversine } from './analytics.js';
 import { Elm327, bleTransport, wsTransport } from './obd.js';
 import { requestMotionPermission, startMotion, startGps, keepAwake } from './sensors.js';
@@ -34,7 +35,7 @@ const G = 9.80665;
 
 // ---------------- settings ----------------
 const settings = (() => {
-  const def = { camFull: true, compact: true, discreet: true, voiceOn: true, voiceWake: false, protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: '', keepSide: 'left', autoWatch: true, ytLink: '', dashcam: true, dcDays: '5', dcQuality: '2160', w3wKey: '', rawLog: false };
+  const def = { camFull: true, compact: true, discreet: true, voiceOn: true, voiceWake: false, protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: '', keepSide: 'left', autoWatch: true, ytLink: '', dashcam: true, dcDays: '5', dcQuality: '2160', w3wKey: '', rawLog: false, navHud: true, navVoice: true, tomtomKey: '' };
   try {
     const v = { ...def, ...JSON.parse(localStorage.getItem('ridelens.settings') || '{}') };
     if (typeof v.invertYaw === 'boolean') v.invertYaw = v.invertYaw ? 'invert' : ''; // migrate old checkbox
@@ -424,6 +425,9 @@ bind('camFullSet', 'camFull');
 bind('discreet', 'discreet');
 bind('keepSide', 'keepSide', 'change', () => { if (autoStop) { stopAuto(); startAuto(); } });
 bind('w3wKey', 'w3wKey', 'input');
+bind('navHud', 'navHud', 'change', () => { if (immersive) { navHud.stop(); navHud.start(); } });
+bind('navVoice', 'navVoice');
+bind('tomtomKey', 'tomtomKey', 'input');
 bind('theme', 'theme', 'change', applyTheme);
 bind('invertYaw', 'invertYaw', 'change', () => toast('Applies from the next ride'));
 $('testServer').addEventListener('click', async () => {
@@ -774,6 +778,12 @@ function renderHazards(allRides) {
   if (hazardSpots.length) hazardMap.fitBounds(L.latLngBounds(hazardSpots.map((x) => [x.lat, x.lon])), { padding: [24, 24], maxZoom: 16 });
 }
 $('hzOld').addEventListener('change', async () => renderHazards(await db.all('rides')));
+// Waze-style navigation on the full-screen camera: own detected hazards + OSM breakers, turns, ETA, traffic
+const navHud = createNavHud({
+  L, $, settings, imperial, fmtDist, fmtHM: (t) => fmtHM(t),
+  getTrip: () => trip,
+  getOwnSpots: async () => mergeHazards((await db.all('rides')).filter(currentDetector)),
+});
 $('hzGeo').addEventListener('click', () => download('road-hazards.geojson', JSON.stringify(hazardsGeoJson(hazardSpots), null, 1), 'application/geo+json'));
 $('hzCsv').addEventListener('click', () => download('road-hazards.csv', hazardsCsv(hazardSpots), 'text/csv'));
 
@@ -912,12 +922,15 @@ function setImmersive(on) {
     try { $('camBox').requestFullscreen?.({ navigationUI: 'hide' })?.catch?.(() => {}); } catch { /* iPhone: no element full screen; the fixed full-window layout is used */ }
     window.scrollTo(0, 0);
     updateHud(); hudTimer = setInterval(updateHud, 500);
-  } else if (document.fullscreenElement) { try { document.exitFullscreen?.()?.catch?.(() => {}); } catch {} }
+    navHud.start();
+  } else { navHud.stop(); }
+  if (!on && document.fullscreenElement) { try { document.exitFullscreen?.()?.catch?.(() => {}); } catch {} }
 }
 function updateHud() {
   const sn = analyzer.snapshot();
   const fresh = sn.fix && Date.now() - (sn.fix.t ?? 0) < 5000;
-  $('hudSpeed').textContent = fresh || sn.speedSrc === 'obd' ? fmtSpeed(sn.speedKmh) : '—';
+  const navKmh = navHud.speedKmh;
+  $('hudSpeed').textContent = fresh || sn.speedSrc === 'obd' ? fmtSpeed(sn.speedKmh) : navKmh != null ? fmtSpeed(navKmh) : '—';
   $('hudUnit').textContent = speedUnit();
   $('hudGps').textContent = fresh ? `GPS ±${Math.round(sn.fix.accuracy ?? 0)} m` : 'GPS —';
   $('hudGps').classList.toggle('warn', !fresh);
