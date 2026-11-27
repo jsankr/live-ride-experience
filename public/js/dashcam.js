@@ -62,20 +62,50 @@ export function retention(clips, now, { days = 7, maxBytes = Infinity } = {}) {
 export const overlapping = (clips, t, before = 30000, after = 30000) =>
   clips.filter((c) => c.start <= t + after && c.end >= t - before);
 
+// Subtitle sidecar: one cue per second with the stamp lines (time, speed, GPS). Players
+// (VLC, QuickTime with the .srt beside the video, the in-app player via WebVTT) show it
+// over the picture, without the phone redrawing every 4K frame to burn it in.
+const ts = (ms, sep) => {
+  const h = Math.floor(ms / 3600000), m = Math.floor(ms / 60000) % 60, s2 = Math.floor(ms / 1000) % 60, f = Math.floor(ms % 1000);
+  return `${pad(h)}:${pad(m)}:${pad(s2)}${sep}${String(f).padStart(3, '0')}`;
+};
+export function toSrt(cues, endMs) { // cues: [{ t: ms from clip start, lines: [] }]
+  return cues.map((c, i) => `${i + 1}\n${ts(c.t, ',')} --> ${ts(Math.min(cues[i + 1]?.t ?? endMs, endMs), ',')}\n${c.lines.join('\n')}\n`).join('\n');
+}
+export function srtToVtt(srt) {
+  return `WEBVTT\n\n${srt.replace(/^\d+\n/gm, '').replace(/(\d\d:\d\d:\d\d),(\d\d\d)/g, '$1.$2')}`;
+}
+
 // ---------- recorder ----------
 export class Dashcam {
-  constructor({ getOverlay, onSegment, onError, segmentMs = 60000, height = 720, fps = 20, bitsPerSecond = 2500000 }) {
-    Object.assign(this, { getOverlay, onSegment, onError, segmentMs, height, fps, bitsPerSecond });
+  // burnIn: draw the stamp onto every frame (a canvas redraw per frame on the page's main
+  // thread: at 4K that starved the wrong-side detector and the motion sensors on 27 Nov).
+  // Default: record the camera itself and write the stamp as subtitles.
+  constructor({ getOverlay, onSegment, onError, segmentMs = 60000, height = 720, fps = 20, bitsPerSecond = 2500000, burnIn = false }) {
+    Object.assign(this, { getOverlay, onSegment, onError, segmentMs, height, fps, bitsPerSecond, burnIn });
     this.mime = pickMime((m) => window.MediaRecorder?.isTypeSupported(m));
     this.running = false;
   }
 
-  get supported() { return !!window.MediaRecorder && !!this.mime && !!HTMLCanvasElement.prototype.captureStream; }
+  get supported() { return !!window.MediaRecorder && !!this.mime && (!this.burnIn || !!HTMLCanvasElement.prototype.captureStream); }
 
   start(video) {
     if (this.running) return;
     if (!this.supported) throw new Error('This browser cannot record video');
     this.video = video;
+    const src = video.srcObject;
+    if (!this.burnIn && src?.getVideoTracks?.().length) {
+      // the camera's own stream, encoded natively: no per-frame work for the page. A clone, so
+      // stopping the dashcam never stops the camera (or the detector watching it).
+      const track = src.getVideoTracks()[0].clone();
+      this.stream = new MediaStream([track]);
+      const st = track.getSettings?.() || {};
+      this.width = st.width || video.videoWidth; this.height = st.height || video.videoHeight;
+      this.running = true;
+      this.cueTimer = setInterval(() => { const lines = this.getOverlay?.() || []; if (lines.length && this.segStart) this.cues.push({ t: Date.now() - this.segStart, lines }); }, 1000);
+      this.nextSegment();
+      return;
+    }
     // Draw the camera plus a date/time/speed/GPS stamp onto a canvas and record that,
     // so every frame carries its own evidence of when and where.
     // `height` is the target for the shorter side (720p, 1080p, 2160p = 4K); never upscale,
@@ -84,6 +114,7 @@ export class Dashcam {
     const k = Math.min(1, this.height / Math.min(vw, vh));
     const w = Math.round((vw * k) / 2) * 2, h = Math.round((vh * k) / 2) * 2;
     this.canvas = Object.assign(document.createElement('canvas'), { width: w, height: h });
+    this.width = w; this.height = h;
     this.ctx = this.canvas.getContext('2d');
     this.stream = this.canvas.captureStream(this.fps);
     this.running = true;
@@ -110,10 +141,12 @@ export class Dashcam {
     if (!this.running) return;
     const rec = new MediaRecorder(this.stream, { mimeType: this.mime, videoBitsPerSecond: this.bitsPerSecond });
     const chunks = [], start = Date.now();
+    const cues = this.cues = []; this.segStart = start;
+    const first = this.getOverlay?.() || []; if (!this.burnIn && first.length) cues.push({ t: 0, lines: first });
     rec.ondataavailable = (e) => { if (e.data?.size) chunks.push(e.data); };
     rec.onstop = () => {
       const end = Date.now();
-      if (chunks.length) this.onSegment?.({ blob: new Blob(chunks, { type: this.mime.split(';')[0] }), start, end, mime: this.mime.split(';')[0] });
+      if (chunks.length) this.onSegment?.({ blob: new Blob(chunks, { type: this.mime.split(';')[0] }), start, end, mime: this.mime.split(';')[0], srt: this.burnIn || !cues.length ? null : toSrt(cues, end - start) });
     };
     rec.onerror = (e) => this.onError?.(e.error || new Error('Recorder error'));
     rec.start(1000);
@@ -124,7 +157,7 @@ export class Dashcam {
 
   stop() {
     this.running = false;
-    clearTimeout(this.segTimer); clearTimeout(this.drawTimer);
+    clearTimeout(this.segTimer); clearTimeout(this.drawTimer); clearInterval(this.cueTimer);
     if (this.rec?.state === 'recording') this.rec.stop();
     this.stream?.getTracks().forEach((t) => t.stop());
   }

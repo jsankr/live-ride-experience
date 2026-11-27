@@ -19,7 +19,7 @@ if (window.__RIDELENS_SHELL_BUILD !== BUILD) {
 }
 import { rememberPlace, savePlace, unsavePlace, forgetPlace, rideEnds, suggestPlaces, ago } from './places.js';
 import { inTimeRange, REPORT_KINDS, fromOldDetector, selectReports, selectClips, selectEvents, removeEvents } from './select.js';
-import { Dashcam, fileName, retention, overlapping, stamp, DAY_PARTS } from './dashcam.js';
+import { Dashcam, fileName, retention, overlapping, stamp, DAY_PARTS, srtToVtt } from './dashcam.js';
 import { mergeHazards, hazardsGeoJson, hazardsCsv } from './hazards.js';
 import { createNavHud } from './nav-hud.js';
 import { localMatches, tomtomSuggest, photonSuggest, mergeSuggestions, createSuggester, looksLikeAddressCode } from './place-search.js';
@@ -37,7 +37,7 @@ const G = 9.80665;
 
 // ---------------- settings ----------------
 const settings = (() => {
-  const def = { camFull: true, compact: true, discreet: true, voiceOn: true, voiceWake: false, protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: '', keepSide: 'left', autoWatch: true, ytLink: '', dashcam: true, dcDays: '5', dcQuality: '2160', w3wKey: '', rawLog: false, navHud: true, navVoice: true, tomtomKey: '' };
+  const def = { camFull: true, compact: true, discreet: true, voiceOn: true, voiceWake: false, protocol: '0', bridgeUrl: '', serverUrl: '', serverToken: '', units: 'metric', theme: '', invertYaw: '', keepSide: 'left', autoWatch: true, ytLink: '', dashcam: true, dcDays: '5', dcQuality: '2160', dcBurn: false, w3wKey: '', rawLog: false, navHud: true, navVoice: true, tomtomKey: '' };
   try {
     const v = { ...def, ...JSON.parse(localStorage.getItem('ridelens.settings') || '{}') };
     if (typeof v.invertYaw === 'boolean') v.invertYaw = v.invertYaw ? 'invert' : ''; // migrate old checkbox
@@ -256,8 +256,12 @@ async function stopRide() {
 }
 
 function packRide(id, an) {
+  const rideStart = an.summary().startT ?? 0;
+  const watch = [...watchSessions.filter((w) => w.endedAt >= rideStart), ...(autoStop?.diagnostics ? [{ ...autoStop.diagnostics(), endedAt: Date.now() }] : [])];
+  watchSessions.length = 0;
   return {
-    id, savedAt: Date.now(), detector: 3,
+    id, savedAt: Date.now(), detector: 4,
+    ...(watch.length ? { watch } : {}),
     ...(rawImu?.length ? { raw: { v: 1, t0: rawImu.t0, imu: rawImu } } : {}),
     summary: an.summary(), events: an.events, track: an.track, timeline: an.timeline,
     gears: an.gears,
@@ -657,6 +661,21 @@ $('reportBody').addEventListener('click', async (e) => {
 });
 function rerenderReport() { if (currentRide) { const y = scrollY; renderReport(currentRide); wireRideDocs(currentRide); scrollTo(0, y); } }
 
+// What the wrong-side watcher did on this ride: how often it looked, and the vehicles on our
+// side that came close but were not flagged, with the reason (so a missed one can be judged)
+function watchCard(ride) {
+  const w = ride.watch;
+  if (!w?.length) return ride.detector >= 4 ? '<p class="fine">Wrong-side watcher: the camera was not on during this ride.</p>' : '';
+  const checks = w.reduce((a, x) => a + x.checks, 0), mins = w.reduce((a, x) => a + x.minutes, 0);
+  const rate = mins ? checks / (mins * 60) : 0;
+  const infer = Math.round(w.reduce((a, x) => a + (x.avgInferMs ?? 0) * x.checks, 0) / Math.max(1, checks));
+  const miss = w.flatMap((x) => x.nearMisses || []);
+  const why = {}; for (const m of miss) why[m.reason] = (why[m.reason] || 0) + 1;
+  const slow = rate < 2.5;
+  return `<article class="card"><div class="card-head"><h3>Wrong-side watcher</h3><span class="status-pill ${slow ? 'warning' : 'good'}">${rate.toFixed(1)} checks/s</span></div>
+    <p class="fine">${mins.toFixed(0)} min watched · ${w.reduce((a, x) => a + x.vehiclesSeen, 0)} vehicles tracked · ${w.reduce((a, x) => a + x.alerts, 0)} flagged · ${infer} ms per check · longest pause ${(Math.max(...w.map((x) => x.maxGapMs)) / 1000).toFixed(1)} s${slow ? '. Fewer than 2.5 checks a second misses fast wrong-side riders: lower the dashcam quality or turn off the burned-in stamp.' : ''}</p>
+    ${miss.length ? `<p class="fine">Close on your side but not flagged: ${Object.entries(why).map(([k, n]) => `${esc(k)} ×${n}`).join(' · ')}</p>` : ''}</article>`;
+}
 function renderReport(ride) {
   const s = ride.summary;
   const [st, word] = SCORE_STATUS(s.scores.overall);
@@ -680,6 +699,8 @@ function renderReport(ride) {
       <div class="row"><button data-doc="road">Road report</button><button data-doc="ws" id="wsDocBtn">Wrong-side report</button></div>
       <p class="fine">Two small files to keep or send: the road (potholes, breakers, rough stretches with GPS) and the wrong-side vehicles (snapshots, plate, vehicle, rider, GPS) for traffic police. Save them to Files, iCloud Drive or Google Drive from the share sheet.</p>
     </article>
+    ${s.imuBunchedPct != null && s.imuBunchedPct >= 30 ? `<p class="banner">The phone was too busy to keep up: ${s.imuBunchedPct}% of motion readings arrived bunched together (camera, dashcam and detector at once). Timings were rebuilt from the sensor rate; if this repeats, record the dashcam at 1080p.</p>` : ''}
+    ${watchCard(ride)}
     ${s.mountShake != null && s.mountShake > 1 ? `<p class="banner">The phone shook ${s.mountShake} m/s² even on smooth road (a firm mount reads 0.3–0.6). Road event counts are less reliable on this ride: use a vibration-damped mount.</p>` : ''}
     <div class="stats">
       ${stat('Distance', fmtDist(s.distanceKm))}
@@ -688,7 +709,7 @@ function renderReport(ride) {
       ${stat('Max lean L / R', `${s.maxLeanLeft.toFixed(0)}° / ${s.maxLeanRight.toFixed(0)}°`)}
       ${stat('Peak g-force', s.peakG.toFixed(2), 'g')}
       ${stat('Climb / descent', `${fmtAlt(s.ascent)} / ${fmtAlt(s.descent)}`)}
-      ${stat('Potholes · bumps', `${s.potholes} · ${s.bumps}`)}
+      ${stat('Potholes · bumps', `${s.potholes} · ${s.bumps}`, (() => { const b = ride.events.filter((e) => e.type === 'bump'); const br = b.filter((e) => e.form === 'breaker').length; return b.some((e) => e.form) ? `${br} breakers, ${b.length - br} small` : ''; })())}
       ${stat('Hard brakes', s.hardBrakes)}
       ${stat('Gear shifts', s.shifts)}
       ${stat('Avg clutch time', s.scores.avgShiftMs ?? '—', s.scores.avgShiftMs ? 'ms' : '')}
@@ -847,7 +868,7 @@ function reanalyseRoadEvents(ride) {
   const events = [...ride.events.filter((e) => !REDO.includes(e.type)), ...redone].sort((a, b) => a.t - b.t);
   const count = (tp) => redone.filter((e) => e.type === tp).length;
   const fresh = an.summary();
-  return { ...ride, events, detector: 3, summary: { ...ride.summary, potholes: count('pothole'), bumps: count('bump'), roughStretches: count('rough'),
+  return { ...ride, events, detector: 4, summary: { ...ride.summary, potholes: count('pothole'), bumps: count('bump'), roughStretches: count('rough'),
     hardBrakes: count('brake'), hardAccels: count('accel'), mountShake: fresh.mountShake, scores: { ...ride.summary.scores, ...fresh.scores, shifting: ride.summary.scores?.shifting ?? fresh.scores.shifting } }, reanalysedAt: Date.now() };
 }
 async function reanalyseRoad(ride) {
@@ -975,7 +996,7 @@ function updateHud() {
   $('hudClock').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const rec = !!dashcam;
   $('hudRec').classList.toggle('on', rec);
-  $('hudRecText').textContent = rec ? `REC ${dashcam.canvas ? `${Math.min(dashcam.canvas.width, dashcam.canvas.height)}p` : ''}` : 'Dashcam off';
+  $('hudRecText').textContent = rec ? `REC ${dashcam.width ? `${Math.min(dashcam.width, dashcam.height)}p` : ''}` : 'Dashcam off';
   const st = window.__autoWatchStatus;
   const side = settings.keepSide === 'right' ? 'right' : 'left';
   const quiet = settings.discreet !== false;
@@ -1223,7 +1244,8 @@ function startAuto() {
     },
   });
 }
-function stopAuto() { autoStop?.(); autoStop = null; $('autoStatus').textContent = camOn ? 'Off. Use the capture button, or turn this on.' : 'Starts with the camera.'; }
+const watchSessions = []; // wrong-side watcher diagnostics of camera sessions during this ride
+function stopAuto() { if (autoStop?.diagnostics) watchSessions.push({ ...autoStop.diagnostics(), endedAt: Date.now() }); autoStop?.(); autoStop = null; $('autoStatus').textContent = camOn ? 'Off. Use the capture button, or turn this on.' : 'Starts with the camera.'; }
 $('autoWatch').checked = settings.autoWatch !== false;
 $('autoWatch').addEventListener('change', (e) => {
   settings.autoWatch = e.target.checked; saveSettings();
@@ -1924,19 +1946,19 @@ function dcOverlay() {
 function startDashcam() {
   if (dashcam || !camOn) return;
   const q = +settings.dcQuality || 720;
-  dashcam = new Dashcam({ height: q, bitsPerSecond: DC_BITRATE[q], segmentMs: (+settings.dcSegmentSec || 60) * 1000, /* dcSegmentSec: test-only override */ getOverlay: dcOverlay, onSegment: saveSegment,
+  dashcam = new Dashcam({ height: q, bitsPerSecond: DC_BITRATE[q], burnIn: settings.dcBurn === true, segmentMs: (+settings.dcSegmentSec || 60) * 1000, /* dcSegmentSec: test-only override */ getOverlay: dcOverlay, onSegment: saveSegment,
     onError: (e) => { $('dcStatus').textContent = `Error: ${e.message}`; } });
   if (!dashcam.supported) { $('dcStatus').textContent = 'This browser cannot record video'; dashcam = null; return; }
   try { dashcam.start($('camVideo')); } catch (e) { $('dcStatus').textContent = e.message; dashcam = null; return; }
   navigator.storage?.persist?.().catch(() => {});
-  const { width: rw, height: rh } = dashcam.canvas, want = +settings.dcQuality;
+  const { width: rw, height: rh } = dashcam, want = +settings.dcQuality;
   const got = Math.min(rw, rh);
-  $('dcStatus').textContent = `● Recording ${dashcam.mime.startsWith('video/mp4') ? 'MP4' : 'WebM'} · ${rw}×${rh}${got < want ? ' (camera limit)' : ''}`;
+  $('dcStatus').textContent = `● Recording ${dashcam.mime.startsWith('video/mp4') ? 'MP4' : 'WebM'} · ${rw}×${rh}${got < want ? ' (camera limit)' : ''}${dashcam.burnIn ? ' · stamp burned in' : ' · stamp as subtitles'}`;
 }
 function stopDashcam() { dashcam?.stop(); dashcam = null; $('dcStatus').textContent = settings.dashcam ? 'Starts with the camera' : 'Off'; }
 
-async function saveSegment({ blob, start, end, mime }) {
-  const clip = { id: uid(), start, end, mime, size: blob.size, name: fileName(start, mime), locked: false, incidents: [] };
+async function saveSegment({ blob, start, end, mime, srt }) {
+  const clip = { id: uid(), start, end, mime, size: blob.size, name: fileName(start, mime), locked: false, incidents: [], ...(srt ? { srt } : {}) };
   const sn = analyzer.snapshot();
   if (sn.fix) clip.endFix = { lat: sn.fix.lat, lon: sn.fix.lon };
   const tl = analyzer.timeline.filter((p) => p.t >= start && p.t <= end);
@@ -2086,16 +2108,21 @@ $('dcList').addEventListener('click', async (e) => {
   if (!blob) { toast('Video data missing'); return; }
   if (a === 'play') {
     const dlg = $('clipDialog'), url = URL.createObjectURL(blob);
-    dlg.innerHTML = `<div class="sheet-body"><div class="card-head"><h3>${esc(clip.name)}</h3><button class="ghost" id="clipClose">Close</button></div><video class="clip-video" src="${url}" controls playsinline autoplay muted></video></div>`;
+    const vtt = clip.srt ? URL.createObjectURL(new Blob([srtToVtt(clip.srt)], { type: 'text/vtt' })) : null;
+    dlg.innerHTML = `<div class="sheet-body"><div class="card-head"><h3>${esc(clip.name)}</h3><button class="ghost" id="clipClose">Close</button></div><video class="clip-video" src="${url}" controls playsinline autoplay muted>${vtt ? `<track kind="subtitles" label="Stamp" src="${vtt}" default>` : ''}</video></div>`;
     $('clipClose').onclick = () => dlg.close();
-    dlg.addEventListener('close', () => URL.revokeObjectURL(url), { once: true });
+    dlg.addEventListener('close', () => { URL.revokeObjectURL(url); if (vtt) URL.revokeObjectURL(vtt); }, { once: true });
     dlg.showModal();
   }
   if (a === 'save') {
     const file = new File([blob], clip.name, { type: clip.mime });
+    // the stamp travels with the video as a same-named .srt (players load it automatically)
+    const sub = clip.srt ? new File([clip.srt], clip.name.replace(/\.\w+$/, '.srt'), { type: 'text/plain' }) : null;
+    const files = sub ? [file, sub] : [file];
     try {
-      if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: clip.name });
-      else download(clip.name, file);
+      if (navigator.canShare?.({ files })) await navigator.share({ files, title: clip.name });
+      else if (navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: clip.name });
+      else { download(clip.name, file); if (sub) download(sub.name, sub); }
     } catch { /* cancelled */ }
   }
 });
@@ -2104,6 +2131,7 @@ const bindDc = (id, key, after) => { const el = $(id); if (el.type === 'checkbox
 bindDc('dcOn', 'dashcam', () => { if (settings.dashcam && camOn) startDashcam(); else stopDashcam(); });
 bindDc('dcDays', 'dcDays', () => enforceRetention().then(renderClips));
 bindDc('dcQuality', 'dcQuality', async () => { if (camOn) { await setCamera(false); await setCamera(true); } });
+bindDc('dcBurn', 'dcBurn', () => { if (dashcam) { stopDashcam(); startDashcam(); } });
 $('dcStatus').textContent = settings.dashcam ? 'Starts with the camera' : 'Off';
 
 // ---------------- capability check (real, per device) ----------------

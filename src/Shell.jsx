@@ -194,7 +194,8 @@ export function Shell() {
         </article>
         <article className="card dashcam-card" id="dashcamCard">
           <div className="card-head"><h3>Dashcam</h3><span className="muted" id="dcStatus">Off</span></div>
-          <label className="check"><input type="checkbox" id="dcOn" defaultChecked /> <span><b>Record video while the camera is on</b><br /><span className="muted">1-minute files with date, time, speed and GPS stamped on the picture. Older files are overwritten; incident footage is locked.</span></span></label>
+          <label className="check"><input type="checkbox" id="dcOn" defaultChecked /> <span><b>Record video while the camera is on</b><br /><span className="muted">1-minute files with date, time, speed and GPS as a subtitle track (a same-named .srt is saved with each file). Older files are overwritten; incident footage is locked.</span></span></label>
+          <label className="check"><input type="checkbox" id="dcBurn" /> <span><b>Burn the stamp into the picture</b><br /><span className="muted">Redraws every frame on the phone: at 1080p and 4K this slows wrong-side detection and road-event timing. Off unless you need the stamp inside the video itself.</span></span></label>
           <div className="two">
             <label>Keep recordings for <select id="dcDays"><option value="1">1 day</option><option value="3">3 days</option><option value="5">5 days</option><option value="7">7 days</option></select></label>
             <label>Quality <select id="dcQuality"><option value="480">480p (~0.5 GB/hour)</option><option value="720">720p (~1.1 GB/hour)</option><option value="1080">1080p (~2 GB/hour)</option><option value="2160">4K (~7 GB/hour, if the camera allows)</option></select></label>

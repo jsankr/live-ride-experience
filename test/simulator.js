@@ -16,8 +16,15 @@ function rng(seed) { // mulberry32
   };
 }
 
-export function createSimulator({ seed = 7, startLat = 12.9716, startLon = 77.5946, mountTiltDeg = 25, roughRoads = false, onImu, onGps, onObd } = {}) {
+export function createSimulator({ startT = null, seed = 7, startLat = 12.9716, startLon = 77.5946, mountTiltDeg = 25, roughRoads = false, breakers = 'box', smallBumps = false, burst = 1, onImu: emitImu, onGps, onObd } = {}) {
   const rand = rng(seed);
+  // burst > 1: deliver motion samples the way a busy browser page does (27 Nov 12:50 ride):
+  // `burst` samples at a time, all stamped with the delivery time of the last one
+  const queue = [];
+  const onImu = burst <= 1 ? emitImu : (t, acc, g) => {
+    queue.push([acc, g]);
+    if (queue.length >= burst) { for (const [a2, g2] of queue.splice(0)) emitImu?.(t, a2, g2); }
+  };
   const gauss = () => { // Box-Muller
     let u = 0, v = 0; while (!u) u = rand(); while (!v) v = rand();
     return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
@@ -37,7 +44,7 @@ export function createSimulator({ seed = 7, startLat = 12.9716, startLon = 77.59
   const RATIOS = [120, 80, 60, 48, 40]; // rpm per km/h for gears 1..5
   const IDLE = 1300;
   const st = {
-    t: Date.now(), v: 0, a: 0, gear: 1, rpm: IDLE,
+    t: startT ?? Date.now(), v: 0, a: 0, gear: 1, rpm: IDLE,
     clutch: null, // {t0, dur, from, to, rpm0}
     heading: 30, yaw: 0, yawUntil: 0, lean: 0,
     lat: startLat, lon: startLon, alt: 920,
@@ -46,7 +53,7 @@ export function createSimulator({ seed = 7, startLat = 12.9716, startLon = 77.59
     roughness: 0.4, roughUntil: 0,
     lastGps: 0, lastObd: 0, lastSlow: 0, coolant: 70,
   };
-  const truth = { potholes: 0, bumps: 0, roughStretches: 0, roughJolts: 0, hardBrakes: 0, shifts: 0, upshifts: 0, downshifts: 0, shiftMs: [], maxLean: 0 };
+  const truth = { potholes: 0, bumps: 0, smallBumps: 0, roughStretches: 0, roughJolts: 0, hardBrakes: 0, shifts: 0, upshifts: 0, downshifts: 0, shiftMs: [], maxLean: 0 };
 
   function plan() {
     const opts = [25, 35, 45, 55, 65, 75, 85, 40, 30, 0];
@@ -124,7 +131,11 @@ export function createSimulator({ seed = 7, startLat = 12.9716, startLon = 77.59
     // --- road impacts
     const WHEELBASE = 1.45; // m: the rear wheel hits the same spot L/v later
     if (st.v > 5 && t > st.nextImpact && !st.bumpAt) {
-      if (rand() < 0.7) {
+      if (smallBumps && st.v > 9 && rand() < 0.3) { // a small hump or raised joint, taken at speed
+        const sev = 0.8 + rand() * 0.4;
+        st.impacts.push({ t0: t, kind: 'small', sev }, { t0: t + (WHEELBASE / st.v) * 1000, kind: 'small', sev: sev * 0.8 });
+        truth.smallBumps++;
+      } else if (rand() < 0.7) {
         const sev = 1.0 + rand() * 0.8;
         st.impacts.push({ t0: t, kind: 'pothole', sev }, { t0: t + (WHEELBASE / st.v) * 1000, kind: 'pothole', sev: sev * 0.7 });
         truth.potholes++;
@@ -145,7 +156,7 @@ export function createSimulator({ seed = 7, startLat = 12.9716, startLon = 77.59
     let zImp = 0;
     st.jolts = st.jolts.filter((j) => t - j.t0 < j.dur);
     for (const j of st.jolts) if (t >= j.t0) zImp += j.a;
-    st.impacts = st.impacts.filter((im) => t - im.t0 < 400 || im.t0 > t);
+    st.impacts = st.impacts.filter((im) => t - im.t0 < (im.kind === "bump" && breakers === "real" ? 650 : 400) || im.t0 > t);
     for (const im of st.impacts) {
       const e = t - im.t0;
       if (e < 0) continue;
@@ -153,6 +164,15 @@ export function createSimulator({ seed = 7, startLat = 12.9716, startLon = 77.59
         if (e < 60) zImp += -0.75 * G * im.sev;
         else if (e < 140) zImp += 1.5 * G * im.sev;
         else if (e < 220) zImp += -0.4 * G * im.sev;
+      } else if (im.kind === 'small') {
+        if (e < 40) zImp += 1.1 * G * im.sev;
+        else if (e < 90) zImp += -0.45 * G * im.sev;
+      } else if (breakers === 'real') {
+        // as recorded on 27 Nov 13:52 at 19 km/h: the wheel climbs (~0.25 g for 300 ms), unloads
+        // over the crest (~-0.9 g), then lands (~+0.5 g)
+        if (e < 300) zImp += 0.28 * G * im.sev;
+        else if (e < 420) zImp += -0.85 * G * im.sev;
+        else if (e < 600) zImp += 0.55 * G * im.sev;
       } else {
         if (e < 110) zImp += 0.95 * G * im.sev;
         else if (e < 230) zImp += -0.55 * G * im.sev;

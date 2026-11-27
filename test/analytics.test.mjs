@@ -178,3 +178,40 @@ test('smooth roads: potholes and speed breakers counted exactly, no rough stretc
     assert.equal(c('rough'), 0);
   }
 });
+
+// ---- 27 Nov 12:50 ride: the page was busy (camera + 4K dashcam) and got its motion samples
+// in bursts of ~8 sharing one timestamp; breakers were logged as potholes or missed ----
+const rideWith = (opts, seed = 11, minutes = 15) => {
+  const a = createAnalyzer();
+  // a fixed start time (as in the app's Dart port): results do not move with the wall clock
+  const sm = createSimulator({ startT: 1.7e12, seed, onImu: (t, x, g) => a.pushImu(t, x, g), onGps: (t, f) => a.pushGps(t, f), onObd: (t, d) => a.pushObd(t, d), ...opts });
+  for (let i = 0; i < minutes * 60 * 50; i++) sm.step(0.02);
+  const c = (k) => a.events.filter((e) => e.type === k).length;
+  return { a, sm, c };
+};
+test('motion samples delivered in bursts give the same road events as a steady stream', () => {
+  for (const seed of [11, 23]) {
+    const steady = rideWith({}, seed), bursty = rideWith({ burst: 8 }, seed);
+    for (const k of ['pothole', 'bump', 'brake']) {
+      assert.ok(Math.abs(bursty.c(k) - steady.c(k)) <= Math.max(1, steady.c(k) * 0.15), `seed ${seed} ${k}: bursty ${bursty.c(k)} vs steady ${steady.c(k)}`);
+    }
+    assert.ok(bursty.c('bump') >= bursty.sm.truth.bumps - 2 && bursty.c('bump') <= bursty.sm.truth.bumps, `seed ${seed} breakers ${bursty.c('bump')} vs ${bursty.sm.truth.bumps}`);
+  }
+});
+test('a real speed breaker (climb, crest, landing) is a breaker, not a pothole', () => {
+  for (const seed of [11, 23, 5]) {
+    const { a, sm, c } = rideWith({ breakers: 'real' }, seed);
+    // (the detector before this fix: 0 breakers and 45 potholes for 16 + 32 on seed 11)
+    assert.ok(c('bump') >= sm.truth.bumps - 2 && c('bump') <= sm.truth.bumps, `seed ${seed} breakers ${c('bump')} vs ${sm.truth.bumps}`);
+    assert.ok(Math.abs(c('pothole') - sm.truth.potholes) <= 2, `seed ${seed} potholes ${c('pothole')} vs ${sm.truth.potholes}`);
+    assert.ok(a.events.filter((e) => e.type === 'bump').every((e) => e.form === 'breaker'));
+  }
+});
+test('small humps and joints taken at speed are counted as small bumps', () => {
+  for (const seed of [11, 23, 5]) {
+    const { a, sm } = rideWith({ smallBumps: true }, seed);
+    const small = a.events.filter((e) => e.type === 'bump' && e.form === 'small').length;
+    assert.ok(sm.truth.smallBumps >= 5, 'scenario has small bumps');
+    assert.ok(small >= sm.truth.smallBumps * 0.7 && small <= sm.truth.smallBumps + 1, `seed ${seed} small bumps ${small} vs ${sm.truth.smallBumps}`);
+  }
+});
