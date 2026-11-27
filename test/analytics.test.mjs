@@ -183,7 +183,8 @@ test('smooth roads: potholes and speed breakers counted exactly, no rough stretc
 // in bursts of ~8 sharing one timestamp; breakers were logged as potholes or missed ----
 const rideWith = (opts, seed = 11, minutes = 15) => {
   const a = createAnalyzer();
-  const sm = createSimulator({ seed, onImu: (t, x, g) => a.pushImu(t, x, g), onGps: (t, f) => a.pushGps(t, f), onObd: (t, d) => a.pushObd(t, d), ...opts });
+  // a fixed start time (as in the app's Dart port): results do not move with the wall clock
+  const sm = createSimulator({ startT: 1.7e12, seed, onImu: (t, x, g) => a.pushImu(t, x, g), onGps: (t, f) => a.pushGps(t, f), onObd: (t, d) => a.pushObd(t, d), ...opts });
   for (let i = 0; i < minutes * 60 * 50; i++) sm.step(0.02);
   const c = (k) => a.events.filter((e) => e.type === k).length;
   return { a, sm, c };

@@ -16,7 +16,7 @@ function rng(seed) { // mulberry32
   };
 }
 
-export function createSimulator({ seed = 7, startLat = 12.9716, startLon = 77.5946, mountTiltDeg = 25, roughRoads = false, breakers = 'box', smallBumps = false, burst = 1, onImu: emitImu, onGps, onObd } = {}) {
+export function createSimulator({ startT = null, seed = 7, startLat = 12.9716, startLon = 77.5946, mountTiltDeg = 25, roughRoads = false, breakers = 'box', smallBumps = false, burst = 1, onImu: emitImu, onGps, onObd } = {}) {
   const rand = rng(seed);
   // burst > 1: deliver motion samples the way a busy browser page does (27 Nov 12:50 ride):
   // `burst` samples at a time, all stamped with the delivery time of the last one
@@ -44,7 +44,7 @@ export function createSimulator({ seed = 7, startLat = 12.9716, startLon = 77.59
   const RATIOS = [120, 80, 60, 48, 40]; // rpm per km/h for gears 1..5
   const IDLE = 1300;
   const st = {
-    t: Date.now(), v: 0, a: 0, gear: 1, rpm: IDLE,
+    t: startT ?? Date.now(), v: 0, a: 0, gear: 1, rpm: IDLE,
     clutch: null, // {t0, dur, from, to, rpm0}
     heading: 30, yaw: 0, yawUntil: 0, lean: 0,
     lat: startLat, lon: startLon, alt: 920,
