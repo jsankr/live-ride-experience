@@ -4,7 +4,7 @@ import { analyzeEvidence, loadDetector, readPlateCrop } from './evidence-analysi
 import { startAutoWatch } from './wrongside-watch.js';
 import { createYouTubePlayer, parseYouTubeLink } from './ytplayer.js';
 import { summarizeRoad, summarizeWrongSide, roadReportHtml, wrongSideReportHtml, blobToDataUrl, stampedSnapshot } from './ride-reports.js';
-import { parseCommand, startVoice, voiceSupported } from './voice.js';
+import { parseCommand, startVoice, voiceSupported, listenOnce, placeFromSpeech } from './voice.js';
 import { BUILD } from './build-id.js';
 window.__RIDELENS_APP_BUILD = BUILD;
 // The opposite mix (fresh app code, stale cached page shell) is caught here: refresh the
@@ -22,6 +22,7 @@ import { inTimeRange, REPORT_KINDS, fromOldDetector, selectReports, selectClips,
 import { Dashcam, fileName, retention, overlapping, stamp, DAY_PARTS } from './dashcam.js';
 import { mergeHazards, hazardsGeoJson, hazardsCsv } from './hazards.js';
 import { createNavHud } from './nav-hud.js';
+import { localMatches, tomtomSuggest, photonSuggest, mergeSuggestions, createSuggester, looksLikeAddressCode } from './place-search.js';
 import { cleanTomTomKey, looksLikeTomTomKey, tomtomFlow } from './nav.js';
 import { createAnalyzer, comfortClass, comfortLegend, haversine } from './analytics.js';
 import { Elm327, bleTransport, wsTransport } from './obd.js';
@@ -1022,7 +1023,12 @@ async function runVoice(cmd) {
     const hit = placeSuggestions.find((p) => (p.name || '').toLowerCase() === want)
       || placeSuggestions.find((p) => p.name && words.every((w) => p.name.toLowerCase().includes(w)));
     if (hit) { if (immersive) setImmersive(false); show('live'); goPlace(hit); }
-    else toast(`No saved place called "${want}". Save it with ☆ in Set destination.`, 3500);
+    else { // not one of yours: search for it and let the rider pick
+      if (immersive) setImmersive(false);
+      show('live'); openTripDialog();
+      $('tripQuery').value = want; $('tripQuery').dispatchEvent(new Event('input'));
+      toast(`Pick "${want}" from the list`, 3000);
+    }
     return;
   }
   if (VIEW_OF[cmd]) {
@@ -1775,6 +1781,61 @@ $('tripEdit').addEventListener('click', openTripDialog);
 $('tripEnd').addEventListener('click', () => endTrip());
 $('tripSearch').addEventListener('click', runTripSearch);
 $('tripQuery').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runTripSearch(); } });
+// ---- destination: suggestions as you type, and by voice ----
+const tripNear = () => analyzer.snapshot().fix || trip?.state.lastFix || placeHere || null;
+let tripSuggest = [];
+function renderSuggestions(list, note = '') {
+  tripSuggest = list || [];
+  $('tripResults').onclick = null; // the Search button's results use their own handler
+  $('tripResults').innerHTML = tripSuggest.map((r, i) => `<li><button type="button" data-s="${i}"><b>${esc(r.name)}</b>${r.source === 'mine' ? ' <span class="muted">★</span>' : ''}${r.distM != null ? ` <span class="muted">· ${fmtDist(r.distM / 1000)}</span>` : ''}${r.detail ? `<br><span class="muted">${esc(r.detail)}</span>` : ''}</button></li>`).join('')
+    + (note ? `<li class="muted">${esc(note)}</li>` : '');
+}
+$('tripResults').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-s]'); if (!b) return;
+  const r = tripSuggest[+b.dataset.s];
+  tripPick = { lat: r.lat, lon: r.lon, name: r.source === 'mine' || !r.detail ? r.name : `${r.name}, ${r.detail.split(',')[0]}` };
+  $('tripResults').querySelectorAll('button').forEach((x) => x.classList.toggle('sel', x === b));
+  showPick();
+});
+const suggestPlaces2 = createSuggester({
+  search: async (q) => {
+    const near = tripNear();
+    if (settings.tomtomKey) {
+      try { return await tomtomSuggest(q, near, settings.tomtomKey); }
+      catch (e) { if (!/rejected/.test(e.message)) throw e; } // a refused key: OpenStreetMap instead
+    }
+    return photonSuggest(q, near);
+  },
+  onResults: (found, q) => {
+    if ($('tripQuery').value.trim() !== q) return; // the box has changed since
+    if (found === null) return; // too short, or a coordinate / code / link: Search handles it
+    const mine = localMatches(loadPlaces(), q);
+    if (found.error) { renderSuggestions(mine, `Suggestions unavailable (${found.error}). Tap Search.`); return; }
+    renderSuggestions(mergeSuggestions(mine, found), found.length || mine.length ? '' : 'No matches yet: keep typing, or tap Search.');
+  },
+});
+$('tripQuery').addEventListener('input', () => {
+  const q = $('tripQuery').value.trim();
+  if (q.length < 2 || looksLikeAddressCode(q)) { if (!q || q.length < 2) renderSuggestions([]); }
+  else renderSuggestions(localMatches(loadPlaces(), q), 'Searching…'); // your own places at once
+  suggestPlaces2(q);
+});
+// say the destination: the command listener pauses while you speak, then carries on
+async function dictateDestination() {
+  const msg = $('tripVoiceMsg'), mic = $('tripMic');
+  const resume = !!voiceStop;
+  voiceStop?.(); voiceStop = null;
+  msg.hidden = false; msg.textContent = '🎙 Listening… say the place, e.g. "Phoenix Marketcity Velachery"'; mic.classList.add('on');
+  try {
+    const said = await listenOnce({ onPartial: (t) => { $('tripQuery').value = placeFromSpeech(t); } });
+    const q = placeFromSpeech(said[0]);
+    $('tripQuery').value = q;
+    msg.textContent = `Heard "${said[0]}"`;
+    $('tripQuery').dispatchEvent(new Event('input'));
+  } catch (err) { msg.textContent = err.message; }
+  finally { mic.classList.remove('on'); if (resume) setVoice(true); }
+}
+$('tripMic').addEventListener('click', dictateDestination);
 $('tripStart').addEventListener('click', () => {
   if (!tripPick) return;
   const targetT = targetFromInput($('tripTime').value);

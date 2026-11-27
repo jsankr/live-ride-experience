@@ -358,9 +358,12 @@ export function Shell() {
     <form method="dialog" className="sheet-body" id="tripForm">
       <div className="card-head"><h3>Destination</h3><button className="ghost" value="cancel" formNoValidate>Close</button></div>
       <label>Search a place, or paste: GPS coordinates · a Plus Code (e.g. WHX8+2G Bengaluru) · a Google Maps / Waze link · a what3words address
-        <div className="row" style={{ margin: 0 }}><input id="tripQuery" placeholder="e.g. Nandi Hills" autoComplete="off" style={{ flex: 1 }} /><button type="button" className="ghost" id="tripSearch">Search</button></div>
+        <div className="row" style={{ margin: 0 }}><input id="tripQuery" placeholder="Start typing, e.g. phoe… or tap the mic" autoComplete="off" enterKeyHint="search" style={{ flex: 1 }} />
+          <button type="button" className="ghost mic" id="tripMic" aria-label="Say the destination" title="Say the destination"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg></button>
+          <button type="button" className="ghost" id="tripSearch">Search</button></div>
       </label>
-      <ul className="results" id="tripResults"></ul>
+      <p className="fine" id="tripVoiceMsg" role="status" hidden></p>
+      <ul className="results" id="tripResults" aria-live="polite"></ul>
       <div id="tripPlacesWrap" hidden>
         <p className="fine" style={{ margin: '4px 0' }}><b>Saved and recent</b> · tap to choose, <b>Go</b> to start at once, ☆ to save with a name</p>
         <ul className="places" id="tripPlaces"></ul>
@@ -374,7 +377,7 @@ export function Shell() {
       </details>
       <label>Target arrival time (optional) <input type="time" id="tripTime" /></label>
       <div className="row"><button type="button" id="tripStart" disabled>Start trip</button></div>
-      <p className="fine">Place search: OpenStreetMap Nominatim. Route and drive time: OSRM on OpenStreetMap data, without live traffic. Waze and Google Maps do not let other apps read their live ETA, so RideLens computes its own and can open either app for turn-by-turn navigation.</p>
+      <p className="fine">Suggestions as you type: your saved and recent places, then TomTom Search with your TomTom key (Setup), or OpenStreetMap (Photon) without one. The Search button uses OpenStreetMap Nominatim. Route, ETA and traffic: TomTom live traffic with your key, otherwise OSRM on OpenStreetMap data without traffic.</p>
       <p className="fine"><b>Note:</b> opening Waze or Google Maps moves RideLens to the background, where browsers pause its sensors, so ride capture stops. On Android, split screen may keep RideLens visible alongside the map.</p>
     </form>
   </dialog>

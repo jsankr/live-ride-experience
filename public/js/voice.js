@@ -85,3 +85,32 @@ export function startVoice({ onCommand, onState, onHeard, requireWake = false, l
   document.addEventListener('pointerdown', onTap);
   return () => { stopped = true; document.removeEventListener('pointerdown', onTap); document.removeEventListener('visibilitychange', onVis); try { rec?.abort(); } catch {} onState?.({ listening: false }); };
 }
+
+// One dictation (a destination): resolves with what was said, best guess first.
+// onPartial gets the words as they are recognised, so the box fills while you speak.
+export function listenOnce({ lang = 'en-IN', onPartial, timeoutMs = 12000 } = {}) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return Promise.reject(new Error('This browser has no speech recognition'));
+  return new Promise((resolve, reject) => {
+    const rec = new SR();
+    rec.lang = lang; rec.continuous = false; rec.interimResults = true; rec.maxAlternatives = 3;
+    let done = false;
+    const finish = (fn, v) => { if (done) return; done = true; clearTimeout(timer); try { rec.abort(); } catch {} fn(v); };
+    const timer = setTimeout(() => finish(reject, new Error('Didn’t hear a place. Tap the mic and say it again.')), timeoutMs);
+    rec.onresult = (e) => {
+      const r = e.results[e.results.length - 1];
+      if (!r.isFinal) { onPartial?.(r[0].transcript); return; }
+      finish(resolve, [...r].map((a) => a.transcript.trim()).filter(Boolean));
+    };
+    rec.onerror = (e) => finish(reject, new Error(e.error === 'not-allowed' || e.error === 'service-not-allowed'
+      ? 'Microphone permission was refused: allow it for this site in the browser settings'
+      : e.error === 'no-speech' ? 'Didn’t hear a place. Tap the mic and say it again.'
+      : e.error === 'audio-capture' ? 'No microphone available (another app may be using it)'
+      : e.error === 'network' ? 'Speech recognition needs an internet connection'
+      : `Speech recognition: ${e.error}`));
+    rec.onend = () => finish(reject, new Error('Didn’t hear a place. Tap the mic and say it again.'));
+    try { rec.start(); } catch (err) { finish(reject, err); }
+  });
+}
+// "take me to Phoenix mall" -> "Phoenix mall"
+export const placeFromSpeech = (t) => String(t || '').replace(/^\s*(?:ride ?lens,?\s*)?(?:(?:please\s+)?(?:go|take me|navigate|ride|head|drive|directions?)\s+to\s+(?:the\s+)?)/i, '').replace(/[.?!]+$/, '').trim();

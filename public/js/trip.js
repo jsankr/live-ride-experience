@@ -11,6 +11,7 @@
 
 import { haversine } from './analytics.js';
 import { cumulative, locate, maneuversFrom, tomtomRoute } from './nav.js';
+import { createSpeedFilter } from './gps-speed.js';
 
 export const OSRM = 'https://router.project-osrm.org';
 export const NOMINATIM = 'https://nominatim.openstreetmap.org';
@@ -150,6 +151,7 @@ export function etaStatus({ now, remainingS, targetT, remainingM }) {
 // ---------- trip tracker ----------
 // routeKey: () => the rider's TomTom key, or '' (then OSRM, which has no live traffic)
 export function createTrip({ dest, targetT = null, fetchImpl = fetch, routeKey = () => '' } = {}) {
+  const speedFilter = createSpeedFilter();
   const t = {
     dest, targetT, route: null, routeErr: null, routedAt: 0, offSince: 0,
     startT: null, lastFix: null, lastProj: null,
@@ -193,11 +195,9 @@ export function createTrip({ dest, targetT = null, fetchImpl = fetch, routeKey =
   function update(now, fix) {
     if (t.startT == null) t.startT = now;
     const prev = t.lastFix;
-    if (prev) {
-      const d = haversine(prev.lat, prev.lon, fix.lat, fix.lon);
-      const dt = (now - prev.t) / 1000;
-      if (dt > 0 && d / dt > 0.8 && d / dt < 100) { t.movingS += dt; t.movingM += d; }
-    }
+    // moving time and distance only from real travel, not GPS wander while stopped
+    const sf = speedFilter(now, fix);
+    if (prev && sf.moving && sf.stepM > 0) { t.movingS += (now - prev.t) / 1000; t.movingM += sf.stepM; }
     t.lastFix = { ...fix, t: now };
     t.avgKmh = t.movingS > 30 ? (t.movingM / t.movingS) * 3.6 : null;
     t.straightKm = haversine(fix.lat, fix.lon, dest.lat, dest.lon) / 1000;

@@ -105,13 +105,27 @@ test('learns the gyro sign automatically (browsers disagree on accelerometer sig
 
 test('ignores Safari-style invalid GPS values and position jumps', () => {
   const a = createAnalyzer();
-  const t0 = 1e12;
-  a.pushGps(t0, { lat: 12.97, lon: 77.59, alt: 900, speed: -1, heading: -1, accuracy: 5 });
-  a.pushGps(t0 + 1000, { lat: 12.97, lon: 77.59005, alt: 900, speed: -1, heading: -1, accuracy: 5 }); // ~5.4 m in 1 s
-  assert.ok(Math.abs(a.snapshot().speedKmh - 19.5) < 1.5, `computed ${a.snapshot().speedKmh}`);
-  a.pushGps(t0 + 2000, { lat: 12.98, lon: 77.59005, alt: 900, speed: null, heading: null, accuracy: 5 }); // 1.1 km jump
+  const t0 = 1e12, M = 1 / 111320;
+  // Safari: speed and heading -1 ("unknown"); riding north at ~19.5 km/h (5.4 m/s) for 10 s
+  for (let i = 0; i <= 10; i++) a.pushGps(t0 + i * 1000, { lat: 12.97 + i * 5.4 * M, lon: 77.59, alt: 900, speed: -1, heading: -1, accuracy: 5 });
+  assert.ok(Math.abs(a.snapshot().speedKmh - 19.5) < 2, `computed ${a.snapshot().speedKmh}`);
+  const before = a.snapshot().distanceKm;
+  a.pushGps(t0 + 11000, { lat: 12.98, lon: 77.59, alt: 900, speed: null, heading: null, accuracy: 5 }); // 1.1 km jump
   assert.ok(a.snapshot().speedKmh < 25, `jump rejected: ${a.snapshot().speedKmh}`);
-  assert.ok(a.snapshot().distanceKm < 0.05, 'jump not added to distance');
+  assert.ok(a.snapshot().distanceKm - before < 0.01, 'jump not added to distance');
+});
+
+test('sitting still: GPS wander is not speed and adds no distance (was ~3 km/h)', () => {
+  const a = createAnalyzer();
+  const t0 = 1e12, M = 1 / 111320;
+  let maxKmh = 0;
+  for (let i = 0; i < 120; i++) {
+    const w = [Math.sin(i * 1.7) * 4, Math.cos(i * 2.3) * 4]; // a few metres of wander
+    a.pushGps(t0 + i * 1000, { lat: 12.97 + w[0] * M, lon: 77.59 + w[1] * M, alt: 900, speed: Math.abs(Math.sin(i)) * 0.5, heading: -1, accuracy: 8 });
+    maxKmh = Math.max(maxKmh, a.snapshot().speedKmh);
+  }
+  assert.equal(maxKmh, 0);
+  assert.equal(a.snapshot().distanceKm, 0);
 });
 
 test('comfort colours: only Comfortable is green, and the legend covers every band', () => {

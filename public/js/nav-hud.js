@@ -6,6 +6,7 @@ import {
   osmBreakers, bboxAround, mergeSpots, probesAhead, tomtomFlow, worstTraffic, dist, bearing, eventsAhead,
 } from './nav.js';
 import { startGps } from './sensors.js';
+import { createSpeedFilter } from './gps-speed.js';
 
 const ARROW = {
   straight: 'M12 21V5M6 11l6-6 6 6',
@@ -31,6 +32,7 @@ export function createNavHud({ L, $, getTrip, getOwnSpots, settings, imperial, f
   let traffic = null, trafficAt = 0, trafficBusy = false;
   let hazardShown = null, hazardTimer = null;
   const prompt = createTurnPrompter();
+  const speedFilter = createSpeedFilter(); // 0 km/h when standing still, not GPS wander
   const alert = createHazardAlerter();
   // accidents, closures and road works need more warning than a pothole: ~20 s, never under 250 m
   const incidentAlert = createHazardAlerter({ seconds: 20, minM: 250 });
@@ -97,9 +99,9 @@ export function createNavHud({ L, $, getTrip, getOwnSpots, settings, imperial, f
   }
 
   function onFix(t, f) {
-    if (!(f.accuracy < 80)) return;
+    if (!(f.accuracy < 80)) { speedFilter(t, f); return; } // still let it see the fix, it ignores vague ones
     const prev = fix;
-    const v = Number.isFinite(f.speed) && f.speed >= 0 ? f.speed : prev ? dist(prev, f) / Math.max(0.2, (t - prev.t) / 1000) : 0;
+    const v = speedFilter(t, f).speed;
     speedKmh = v * 3.6;
     // heading only while moving (a standing phone's heading wanders)
     if (Number.isFinite(f.heading) && f.heading >= 0 && v > 1.5) heading = f.heading;
