@@ -3,6 +3,18 @@
 // playlists/videos, so their links play through the standard embedded player.
 // YouTube's API terms require the player itself to stay visible (min 200x200 px).
 
+// The YouTube link in some copied text ("Check out this playlist https://music.youtube.com/…"),
+// or null. Share sheets often copy a sentence around the link.
+export function youTubeLinkIn(text) {
+  const t = String(text || '').trim();
+  if (!t) return null;
+  for (const m of t.match(/https?:\/\/\S+|(?:www\.|m\.|music\.)?youtu(?:\.be|be\.com)\/\S+/gi) || [t]) {
+    const link = m.replace(/[)\].,!?'"]+$/, '');
+    if (parseYouTubeLink(link)) return link;
+  }
+  return null;
+}
+
 // Accepts links from youtube.com, music.youtube.com, m.youtube.com and youtu.be, or a bare
 // playlist / video ID. Returns { list, video } (either may be null) or null.
 export function parseYouTubeLink(input) {
@@ -50,13 +62,24 @@ export function createYouTubePlayer(elementId, { onChange } = {}) {
     index: player?.getPlaylistIndex?.() ?? -1, count: player?.getPlaylist?.()?.length ?? 0,
   });
 
-  async function load(link) {
+  // autoplay false: only cue it, so a later tap on Play starts it at once (iPhone Safari
+  // only lets a tap start sound if the player is already there when you tap)
+  // One load at a time: a ▶ tap while the player is still being prepared in the background
+  // must not build a second player or call one that isn't ready yet.
+  let queue = Promise.resolve();
+  function load(link, opts) {
+    const run = queue.then(() => doLoad(link, opts));
+    queue = run.catch(() => {});
+    return run;
+  }
+  async function doLoad(link, { autoplay = true } = {}) {
     const parsed = parseYouTubeLink(link);
     if (!parsed) throw new Error('That is not a YouTube or YouTube Music link');
     const YT = await loadApi();
     if (player) {
-      if (parsed.list) player.loadPlaylist({ list: parsed.list, listType: 'playlist', index: 0 });
-      else player.loadVideoById(parsed.video);
+      await ready;
+      if (parsed.list) player[autoplay ? 'loadPlaylist' : 'cuePlaylist']({ list: parsed.list, listType: 'playlist', index: 0 });
+      else player[autoplay ? 'loadVideoById' : 'cueVideoById'](parsed.video);
       return parsed;
     }
     ready = new Promise((resolve, reject) => {
@@ -112,5 +135,6 @@ export function createYouTubePlayer(elementId, { onChange } = {}) {
     next: () => call('nextVideo'),
     prev: () => call('previousVideo'),
     get loaded() { return !!player; },
+    get playing() { return state === 1 || state === 3; },
   };
 }

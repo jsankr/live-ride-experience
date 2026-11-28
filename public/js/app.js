@@ -2,7 +2,7 @@ import { airCategory, airCell } from './air-quality.js';
 import { setupEvidenceLocation } from './evidence-location.js';
 import { analyzeEvidence, loadDetector, readPlateCrop } from './evidence-analysis.js';
 import { startAutoWatch } from './wrongside-watch.js';
-import { createYouTubePlayer, parseYouTubeLink } from './ytplayer.js';
+import { createYouTubePlayer, parseYouTubeLink, youTubeLinkIn } from './ytplayer.js';
 import { summarizeRoad, summarizeWrongSide, roadReportHtml, wrongSideReportHtml, blobToDataUrl, stampedSnapshot } from './ride-reports.js';
 import { parseCommand, startVoice, voiceSupported, listenOnce, placeFromSpeech } from './voice.js';
 import { BUILD } from './build-id.js';
@@ -1909,29 +1909,83 @@ function refreshMusicUi() {
   $('ytSetupLabel').textContent = musicReady() ? 'Change playlist' : 'Set your YouTube Music playlist';
   $('ytSetup').open = !musicReady();
   refreshMusicFab();
-  if (!musicReady()) $('ytMsg').textContent = 'Paste a playlist link once below, then use the buttons.';
+  if (!musicReady()) $('ytMsg').textContent = 'In YouTube Music: open a playlist, album or song → Share → Copy link. Then tap ▶ here: RideLens picks the copied link up. Or paste it below.';
 }
-async function startMusic(link = settings.ytLink) {
-  if (!link) { $('ytSetup').open = true; $('ytMsg').textContent = 'Paste a YouTube Music link below first.'; return; }
+function saveMusicLink(link) {
+  settings.ytLink = link; saveSettings();
+  musicPrepared = true; // whoever saves it loads it: the card-in-view preparation isn't needed too
+  $('ytLink').value = link; refreshMusicUi();
+}
+// a copied YouTube link from the clipboard (iPhone shows a small "Paste" button to allow it)
+async function linkFromClipboard() {
+  try { return youTubeLinkIn(await navigator.clipboard?.readText?.()); } catch { return null; }
+}
+let musicWatch = null, musicPrepared = false;
+// Every ▶ finds a link the same way: the saved one, or one in the box (saved now), or one
+// copied in YouTube Music (from the clipboard). Before, ▶ ignored an unsaved link in the box.
+async function playMusic() {
+  // already loaded: start it in this very tap, before anything else is awaited (iPhone)
+  const boxed = youTubeLinkIn($('ytLink').value);
+  if (boxed && boxed !== settings.ytLink) saveMusicLink(boxed);
+  if (yt?.loaded && settings.ytLink && settings.ytLink === startMusic.current) { yt.play(); watchMusic(); return; }
+  let link = settings.ytLink;
+  if (!link) {
+    const copied = await linkFromClipboard();
+    if (copied) { saveMusicLink(copied); link = copied; toast('Using the YouTube Music link you copied'); }
+  }
+  if (!link) {
+    $('ytSetup').open = true;
+    $('ytMsg').textContent = 'No playlist yet. In YouTube Music: open a playlist, album or song → Share → Copy link, come back and tap ▶. Or paste the link in the box below.';
+    $('ytLink').focus({ preventScroll: true });
+    return;
+  }
+  await startMusic(link);
+  watchMusic();
+}
+// if nothing is playing a few seconds after ▶, say why instead of staying silent
+function watchMusic() {
+  clearTimeout(musicWatch);
+  musicWatch = setTimeout(() => {
+    if (yt?.loaded && !yt.playing && !/Skipping|Stopped|can't play/.test($('ytMsg').textContent)) {
+      $('ytMsg').textContent = 'Not playing yet? Tap the video once to start it: iPhone needs a tap on the YouTube player the first time. After that ▶ and ⏸ work.';
+    }
+  }, 4000);
+}
+async function startMusic(link = settings.ytLink, { autoplay = true } = {}) {
+  if (!link) return;
   $('ytFrameWrap').hidden = false;
   try {
     yt ??= createYouTubePlayer('ytPlayer', { onChange: renderMusic });
-    if (!yt.loaded || link !== startMusic.current) { $('ytMsg').textContent = 'Loading…'; await yt.load(link); startMusic.current = link; $('ytMsg').textContent = ''; }
-    yt.play();
+    if (!yt.loaded || link !== startMusic.current) {
+      if (autoplay) $('ytMsg').textContent = 'Loading…';
+      await yt.load(link, { autoplay }); startMusic.current = link;
+      if (autoplay || /Loading/.test($('ytMsg').textContent)) $('ytMsg').textContent = '';
+    }
+    if (autoplay) yt.play();
   } catch (e) { $('ytMsg').textContent = e.message; if (!yt?.loaded) $('ytFrameWrap').hidden = true; }
 }
+// Get the saved playlist's player ready (not playing) once the Music card is in view, so
+// the first ▶ starts it straight away.
+new IntersectionObserver(([e]) => {
+  if (e.isIntersecting && !musicPrepared && settings.ytLink && navigator.onLine !== false) { musicPrepared = true; startMusic(settings.ytLink, { autoplay: false }); }
+}, { threshold: 0.1 }).observe($('musicCard'));
 $('ytLink').value = settings.ytLink || '';
 $('ytLoad').addEventListener('click', () => {
-  const link = $('ytLink').value.trim();
-  if (!parseYouTubeLink(link)) { $('ytMsg').textContent = "That isn't a YouTube or YouTube Music link."; return; }
-  settings.ytLink = link; saveSettings(); refreshMusicUi();
-  startMusic(link);
+  const link = youTubeLinkIn($('ytLink').value);
+  if (!link) { $('ytMsg').textContent = "That isn't a YouTube or YouTube Music link."; return; }
+  saveMusicLink(link);
+  playMusic();
+});
+// a pasted link is saved straight away: no separate Save tap needed
+$('ytLink').addEventListener('input', () => {
+  const link = youTubeLinkIn($('ytLink').value);
+  if (link && link !== settings.ytLink) { saveMusicLink(link); $('ytMsg').textContent = 'Saved. Tap ▶ to play.'; startMusic(link, { autoplay: false }); }
 });
 $('ytLink').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('ytLoad').click(); } });
-for (const id of ['ytPlay', 'mfPlay']) $(id).addEventListener('click', () => startMusic());
-for (const id of ['ytPause', 'mfPause']) $(id).addEventListener('click', () => yt?.pause());
-for (const id of ['ytNext', 'mfNext']) $(id).addEventListener('click', () => (yt?.loaded ? yt.next() : startMusic()));
-for (const id of ['ytPrev', 'mfPrev']) $(id).addEventListener('click', () => (yt?.loaded ? yt.prev() : startMusic()));
+for (const id of ['ytPlay', 'mfPlay']) $(id).addEventListener('click', () => playMusic());
+for (const id of ['ytPause', 'mfPause']) $(id).addEventListener('click', () => { clearTimeout(musicWatch); yt?.pause(); });
+for (const id of ['ytNext', 'mfNext']) $(id).addEventListener('click', () => (yt?.loaded ? yt.next() : playMusic()));
+for (const id of ['ytPrev', 'mfPrev']) $(id).addEventListener('click', () => (yt?.loaded ? yt.prev() : playMusic()));
 refreshMusicUi();
 
 // ---------------- dashcam ----------------
